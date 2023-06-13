@@ -1,0 +1,27 @@
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_setup.py:_flush():76] Current SDK version is 0.15.4
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_setup.py:_flush():76] Configure stats pid to 22516
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_setup.py:_flush():76] Loading settings from /home/liam/.config/wandb/settings
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_setup.py:_flush():76] Loading settings from /home/liam/Documents/university/CycleLightning/wandb/settings
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_setup.py:_flush():76] Loading settings from environment variables: {}
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_setup.py:_flush():76] Applying setup settings: {'_disable_service': False}
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_setup.py:_flush():76] Inferring run settings from compute environment: {'program_relpath': 'main.py', 'program': '/home/liam/Documents/university/CycleLightning/main.py'}
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_init.py:_log_setup():507] Logging user logs to ./wandb/run-20230613_150031-unr8y9f8/logs/debug.log
+2023-06-13 15:00:31,378 INFO    MainThread:22516 [wandb_init.py:_log_setup():508] Logging internal logs to ./wandb/run-20230613_150031-unr8y9f8/logs/debug-internal.log
+2023-06-13 15:00:31,380 INFO    MainThread:22516 [wandb_init.py:init():547] calling init triggers
+2023-06-13 15:00:31,380 INFO    MainThread:22516 [wandb_init.py:init():554] wandb.init called with sweep_config: {}
+config: {}
+2023-06-13 15:00:31,381 INFO    MainThread:22516 [wandb_init.py:init():596] starting backend
+2023-06-13 15:00:31,382 INFO    MainThread:22516 [wandb_init.py:init():600] setting up manager
+2023-06-13 15:00:31,393 INFO    MainThread:22516 [backend.py:_multiprocessing_setup():106] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2023-06-13 15:00:31,404 INFO    MainThread:22516 [wandb_init.py:init():606] backend started and connected
+2023-06-13 15:00:31,414 INFO    MainThread:22516 [wandb_init.py:init():703] updated telemetry
+2023-06-13 15:00:31,418 INFO    MainThread:22516 [wandb_init.py:init():736] communicating run to backend with 60.0 second timeout
+2023-06-13 15:00:31,860 ERROR   MainThread:22516 [wandb_init.py:init():762] encountered error: It appears that you do not have permission to access the requested resource. Please reach out to the project owner to grant you access. If you have the correct permissions, verify that there are no issues with your networking setup.(Error 403: Forbidden)
+2023-06-13 15:00:31,941 ERROR   MainThread:22516 [wandb_init.py:init():1170] It appears that you do not have permission to access the requested resource. Please reach out to the project owner to grant you access. If you have the correct permissions, verify that there are no issues with your networking setup.(Error 403: Forbidden)
+Traceback (most recent call last):
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/wandb/sdk/wandb_init.py", line 1152, in init
+    run = wi.init()
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/wandb/sdk/wandb_init.py", line 768, in init
+    raise error
+wandb.errors.CommError: It appears that you do not have permission to access the requested resource. Please reach out to the project owner to grant you access. If you have the correct permissions, verify that there are no issues with your networking setup.(Error 403: Forbidden)
+2023-06-13 15:00:32,943 WARNING MsgRouterThr:22516 [router.py:message_loop():77] message_loop has been closed

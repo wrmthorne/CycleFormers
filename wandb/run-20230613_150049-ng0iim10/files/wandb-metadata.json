@@ -1,0 +1,85 @@
+{
+    "os": "Linux-5.19.0-42-generic-x86_64-with-glibc2.35",
+    "python": "3.10.6",
+    "heartbeatAt": "2023-06-13T14:00:49.879487",
+    "startedAt": "2023-06-13T14:00:49.257593",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "/home/liam/Documents/university/CycleLightning/main.py",
+    "codePath": "main.py",
+    "git": {
+        "remote": "git@github.com:wrmthorne/CycleLightning.git",
+        "commit": "71865316f2e2e2508224c720300f6078d377b9d2"
+    },
+    "email": "liamthorne4@gmail.com",
+    "root": "/home/liam/Documents/university/CycleLightning",
+    "host": "liam-MS-7C52",
+    "username": "liam",
+    "executable": "/home/liam/anaconda3/envs/cycle-lightning/bin/python",
+    "cpu_count": 4,
+    "cpu_count_logical": 8,
+    "cpu_freq": {
+        "current": 2457.9845,
+        "min": 2200.0,
+        "max": 3800.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 2199.549,
+            "min": 2200.0,
+            "max": 3800.0
+        },
+        {
+            "current": 2200.0,
+            "min": 2200.0,
+            "max": 3800.0
+        },
+        {
+            "current": 2199.358,
+            "min": 2200.0,
+            "max": 3800.0
+        },
+        {
+            "current": 2199.402,
+            "min": 2200.0,
+            "max": 3800.0
+        },
+        {
+            "current": 2199.537,
+            "min": 2200.0,
+            "max": 3800.0
+        },
+        {
+            "current": 2199.486,
+            "min": 2200.0,
+            "max": 3800.0
+        },
+        {
+            "current": 2199.515,
+            "min": 2200.0,
+            "max": 3800.0
+        },
+        {
+            "current": 1881.661,
+            "min": 2200.0,
+            "max": 3800.0
+        }
+    ],
+    "disk": {
+        "total": 45.53391647338867,
+        "used": 26.389732360839844
+    },
+    "gpu": "NVIDIA GeForce GTX 1650 SUPER",
+    "gpu_count": 1,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA GeForce GTX 1650 SUPER",
+            "memory_total": 4294967296
+        }
+    ],
+    "memory": {
+        "total": 15.568634033203125
+    }
+}

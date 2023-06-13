@@ -1,0 +1,45 @@
+/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/loops/utilities.py:94: PossibleUserWarning: `max_epochs` was not set. Setting it to 1000 epochs. To train without an epoch limit, set `max_epochs=-1`.
+  rank_zero_warn(
+  | Name    | Type            | Params
+--------------------------------------------
+0 | model_a | GPT2LMHeadModel | 124 M
+1 | model_b | GPT2LMHeadModel | 124 M
+--------------------------------------------
+248 M     Trainable params
+0         Non-trainable params
+248 M     Total params
+995.518   Total estimated model params size (MB)
+Traceback (most recent call last):
+  File "/home/liam/Documents/university/CycleLightning/main.py", line 121, in <module>
+    main(args)
+  File "/home/liam/Documents/university/CycleLightning/main.py", line 104, in main
+    trainer.fit(model)
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/trainer.py", line 608, in fit
+    call._call_and_handle_interrupt(
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/call.py", line 38, in _call_and_handle_interrupt
+    return trainer_fn(*args, **kwargs)
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/trainer.py", line 650, in _fit_impl
+    self._run(model, ckpt_path=self.ckpt_path)
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/trainer.py", line 1112, in _run
+    results = self._run_stage()
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/trainer.py", line 1191, in _run_stage
+    self._run_train()
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/trainer.py", line 1214, in _run_train
+    self.fit_loop.run()
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/loops/loop.py", line 194, in run
+    self.on_run_start(*args, **kwargs)
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/loops/fit_loop.py", line 206, in on_run_start
+    self.trainer.reset_train_dataloader(self.trainer.lightning_module)
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/trainer.py", line 1529, in reset_train_dataloader
+    self.train_dataloader = self._data_connector._request_dataloader(RunningStage.TRAINING)
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/connectors/data_connector.py", line 446, in _request_dataloader
+    dataloader = source.dataloader()
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/connectors/data_connector.py", line 520, in dataloader
+    return self.instance.trainer._call_lightning_module_hook(self.name, pl_module=self.instance)
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/pytorch_lightning/trainer/trainer.py", line 1356, in _call_lightning_module_hook
+    output = fn(*args, **kwargs)
+  File "/home/liam/Documents/university/CycleLightning/main.py", line 85, in train_dataloader
+    loader_a = DataLoader(load_from_disk(self.data_a), self.batch_size, shuffle=True, collate_fn=collator_a)
+  File "/home/liam/anaconda3/envs/cycle-lightning/lib/python3.10/site-packages/datasets/load.py", line 1886, in load_from_disk
+    raise FileNotFoundError(f"Directory {dataset_path} not found")
+FileNotFoundError: Directory data/a not found
