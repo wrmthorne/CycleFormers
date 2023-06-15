@@ -31,7 +31,5 @@ class TextDataset(object):
         else:
             load_dataset(data_path)
 
-        print(data['train'])
         data['train'] = data['train'].map(lambda x: self.tokenize(x['text']), remove_columns=['text'])
-        print(data['train'])
         return data['train']
