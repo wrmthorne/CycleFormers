@@ -3,3 +3,4 @@ __pycache__
 wandb
 lightning_logs
 CycleTraining
+*.arrow
