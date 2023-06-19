@@ -18,7 +18,7 @@ class TextDataset(object):
 
         return result
 
-    def load_data(self, data_path, val_set_size):
+    def load_data(self, data_path):
         if data_path.endswith('.json') or data_path.endswith('.jsonl'):
             data = load_dataset('json', data_files=data_path)
         elif os.path.isdir(data_path):
@@ -29,13 +29,10 @@ class TextDataset(object):
         data['train'] = data['train'].map(lambda x: self.tokenize(x['text']), remove_columns=['text'])
 
         if 'validation' in data.keys():
-            data['validation'] = data['validation'].map(lambda x: self.tokenize(x['text']), remove_columns=['text'])
-        elif val_set_size > 0:
-            train_val = data["train"].train_test_split(
-                test_size=val_set_size, shuffle=True, seed=42
-            )
-            data['train'] = train_val['train']
-            data['validation'] = train_val['test']
+            data['validation'] = data['validation'].map(lambda x: {
+                    **self.tokenize(x['text']),
+                    'labels': self.tokenize(x['label'])['input_ids']
+                }, remove_columns=['text', 'label'])
         else:
             data['validation'] = None
 

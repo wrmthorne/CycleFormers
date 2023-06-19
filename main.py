@@ -13,48 +13,36 @@ import sys
 from lightning.pytorch.utilities import CombinedLoader
 
 class CycleModel(LightningModule):
-    def __init__(self, model_a_name_or_path, task_a, data_a, data_a_val_size, data_b, data_b_val_size, model_b_name_or_path=None, task_b=None, batch_size=32):
+    def __init__(self, model_name_or_path, data_a, data_b, task, batch_size, gradient_accumulation_steps):
         super().__init__()
+
+        self.task = task.upper()
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+
+        if not self.tokenizer.pad_token:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        self.task_a = task_a
-        if not task_b:
-            self.task_b = task_a
-
-        if not model_b_name_or_path:
-            model_b_name_or_path = model_a_name_or_path
-        
-        if self.task_a.upper() == 'CAUSAL_LM':
-            self.model_a = AutoModelForCausalLM.from_pretrained(model_a_name_or_path)
-        elif self.task_a.upper() == 'SEQ2SEQ_LM':
-            self.model_a = AutoModelForSeq2SeqLM.from_pretrained(model_a_name_or_path)
+        if self.task == 'CAUSAL_LM':
+            self.model_a = AutoModelForCausalLM.from_pretrained(model_name_or_path)
+            self.model_b = AutoModelForCausalLM.from_pretrained(model_name_or_path)
+            self.tokenizer.padding_side = 'left'
+            self.cycle = self._cycle_causal
+        elif self.task == 'SEQ2SEQ_LM':
+            self.model_a = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
+            self.model_b = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
+            self.cycle = self._cycle_seq2seq
         else:
-            raise ValueError(f'Unknown task {self.task_a}')
+            raise ValueError(f'Unknown task {self.task}')
 
-        if self.task_b.upper() == 'CAUSAL_LM':
-            self.model_b = AutoModelForCausalLM.from_pretrained(model_b_name_or_path)
-        elif self.task_b.upper() == 'SEQ2SEQ_LM':
-            print('t5')
-            self.model_b = AutoModelForSeq2SeqLM.from_pretrained(model_b_name_or_path)
-        else:
-            raise ValueError(f'Unknown task {self.task_b}')
+        self.collator_a = DataCollatorForSeq2Seq(self.tokenizer, return_tensors='pt', padding=True)
+        self.collator_b = DataCollatorForSeq2Seq(self.tokenizer, return_tensors='pt', padding=True)
 
-        self.tokenizer_a = AutoTokenizer.from_pretrained(model_a_name_or_path)
-        self.tokenizer_b = AutoTokenizer.from_pretrained(model_b_name_or_path)
+        self.train_data_a, self.val_data_a = TextDataset(self.tokenizer).load_data(data_a)
+        self.train_data_b, self.val_data_b = TextDataset(self.tokenizer).load_data(data_b)
 
-        if not self.tokenizer_a.pad_token:
-            self.tokenizer_a.pad_token = self.tokenizer_a.eos_token
-        if not self.tokenizer_b.pad_token:
-            self.tokenizer_b.pad_token = self.tokenizer_b.eos_token
-
-        self.collator_a = DataCollatorForSeq2Seq(self.tokenizer_a, return_tensors='pt', padding=True)
-        self.collator_b = DataCollatorForSeq2Seq(self.tokenizer_b, return_tensors='pt', padding=True)
-
-        self.train_data_a, self.val_data_a = TextDataset(self.tokenizer_a).load_data(data_a, data_a_val_size)
-        self.train_data_b, self.val_data_b = TextDataset(self.tokenizer_b).load_data(data_b, data_b_val_size)
-
-        print(self.val_data_a)
-        print(self.val_data_b)
         self.batch_size = batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
 
         self.automatic_optimization = False
 
@@ -73,13 +61,14 @@ class CycleModel(LightningModule):
         return [opt_a, opt_b], [sch_a, sch_b]
     
 
-    def _cycle_causal(self, batch, generating_model, training_model, generating_tokenizer, training_tokenizer):
+    def _cycle_causal(self, batch, generating_model, training_model):
         # Input --GenModel.generate>> Input + ResponseA
         # ResponseA + Input --TrainModel.__call__>> Reconstruction Loss
         prompt_gen, attention_mask = batch['input_ids'], batch['attention_mask']
         prompt_response_gen = generating_model.generate(
             input_ids      = prompt_gen.to(self.device),
             attention_mask = attention_mask.to(self.device),
+            pad_token_id   = self.tokenizer.pad_token_id,
             )
         
         # Split response from prompt
@@ -91,7 +80,7 @@ class CycleModel(LightningModule):
 
         # pad new input to match label size
         pad_size = labels.shape[-1] - response_gen.shape[-1]
-        pad_tensor = torch.full((labels.shape[0], pad_size), training_tokenizer.pad_token_id)
+        pad_tensor = torch.full((labels.shape[0], pad_size), self.tokenizer.pad_token_id)
         prompt_train = torch.cat((pad_tensor.to(self.device), response_gen), dim=-1)
         attention_mask_train = torch.ones_like(prompt_train)
 
@@ -103,17 +92,18 @@ class CycleModel(LightningModule):
         
         return outputs
     
-    def _cycle_seq2seq(self, batch, generating_model, training_model, generating_tokenizer, training_tokenizer):
+    def _cycle_seq2seq(self, batch, generating_model, training_model):
         input_gen, attention_mask_gen = batch['input_ids'], batch['attention_mask']
         response_gen = generating_model.generate(
             input_ids      = input_gen.to(self.device),
             attention_mask = attention_mask_gen.to(self.device),
+            pad_token_id   = self.tokenizer.pad_token_id,
             )
         
         input_train = response_gen[:, 1:] # remove leading pad token
         attention_mask_train = torch.ones_like(input_train)
         labels = input_gen
-        labels[labels==training_tokenizer.pad_token_id] = -100
+        labels[labels==self.tokenizer.pad_token_id] = -100
 
         outputs = training_model(
             input_ids      = input_train.to(self.device),
@@ -128,24 +118,37 @@ class CycleModel(LightningModule):
         sch_a, sch_b = self.lr_schedulers()
         
         if batch['a']:
-            loss_a = self._cycle_seq2seq(batch['a'], self.model_b, self.model_a, self.tokenizer_b, self.tokenizer_a).loss
+            loss_a = self.cycle(batch['a'], self.model_b, self.model_a).loss
             self.manual_backward(loss_a)
-            opt_a.step()
-            sch_a.step()
-            opt_a.zero_grad()
 
-            self.log('train_loss_a', loss_a, on_step=True, logger=True)
-            self.log('opt_a_lr', opt_a.param_groups[0]['lr'], on_step=True, logger=True)
+            if batch_idx % self.gradient_accumulation_steps == 0:
+                opt_a.step()
+                sch_a.step()
+                opt_a.zero_grad()
+
+                self.log('train_loss_a', loss_a, on_step=True, logger=True)
+                self.log('opt_a_lr', opt_a.param_groups[0]['lr'], on_step=True, logger=True)
 
         if batch['b']:
-            loss_b = self._cycle_seq2seq(batch['b'], self.model_a, self.model_b, self.tokenizer_a, self.tokenizer_b).loss
+            loss_b = self.cycle(batch['b'], self.model_a, self.model_b).loss
             self.manual_backward(loss_b)
-            opt_b.step()
-            sch_b.step()
-            opt_b.zero_grad()
+
+            if batch_idx % self.gradient_accumulation_steps == 0:
+                opt_b.step()
+                sch_b.step()
+                opt_b.zero_grad()
 
             self.log('train_loss_b', loss_b, on_step=True, logger=True)
             self.log('opt_b_lr', opt_b.param_groups[0]['lr'], on_step=True, logger=True)
+
+    def validation_step(self, batch, batch_idx):
+        # TODO: validate whether this is the mean loss over the whole validation set or just the final batch eval loss
+        if batch['a']:
+            loss_a = self.model_a(**batch['a']).loss
+            self.log('val_loss_a', loss_a, on_epoch=True, logger=True)
+        if batch['b']:
+            loss_b = self.model_b(**batch['b']).loss
+            self.log('val_loss_b', loss_b, on_epoch=True, logger=True)
 
     def train_dataloader(self):
         loader_a = DataLoader(self.train_data_a, self.batch_size, shuffle=True, collate_fn=self.collator_a)
@@ -161,22 +164,16 @@ def main(args):
     seed_everything(args.seed)
 
     model = CycleModel(
-        args.model_a_name_or_path,
-        args.task_a,
+        args.model_name_or_path,
         args.data_a,
-        args.data_a_val_size,
         args.data_b,
-        args.data_b_val_size,
-        args.model_b_name_or_path,
-        args.task_b,
-        args.batch_size
+        args.task,
+        args.batch_size,
+        args.gradient_accumulation_steps
     )
 
-    # if torch.__version__ >= "2.0.0" and sys.platform != "win32":
-    #     model = torch.compile(model)
-
     trainer = Trainer(
-        max_epochs=10,
+        max_epochs=1,
         log_every_n_steps=1
     )
     if args.use_wandb:
@@ -185,15 +182,12 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_a_name_or_path', type=str, default='gpt2', help='Model name or path to model for model A (default: gpt2)')
-    parser.add_argument('--model_b_name_or_path', type=str, default=None, help='Model name or path to model for model B (default: gpt2)')
-    parser.add_argument('--data_a', type=str, default='data/a.json', help='Path to data for model A (default: data/a.json))')
-    parser.add_argument('--data_b', type=str, default='data/b.json', help='Path to data for model B (default: data/b.json)))')
-    parser.add_argument('--data_a_val_size', type=float, default=0, help='Validation size for data A if no validation split is provided (default: 0)')
-    parser.add_argument('--data_b_val_size', type=float, default=0, help='Validation size for data B if no validation split is provided (default: 0)')
-    parser.add_argument('--task_a', type=str, default='causal_lm', help='Task for model A (default: causal_lm))')
-    parser.add_argument('--task_b', type=str, default=None, help='Task for model B (default: causal_lm)')
+    parser.add_argument('--model_name_or_path', type=str, default='gpt2', help='Model name or path to model for model A (default: gpt2)')
+    parser.add_argument('--data_a', type=str, default='data/example/A', help='Path to data for model A. If this a validation set can be found, it will be loaded (default: data/example/A))')
+    parser.add_argument('--data_b', type=str, default='data/example/B', help='Path to data for model B. If this a validation set can be found, it will be loaded (default: data/example/B)))')
+    parser.add_argument('--task', type=str, default='causal_lm', help='Task for model A (default: causal_lm))')
     parser.add_argument('--batch_size', type=int, default=2, help='Batch size (default: 2)')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='Gradient accumulation (default: 1)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed (default: 42)')
     parser.add_argument('--use_wandb', action='store_true', default=False, help='Use wandb for logging (default: False)')
     parser.add_argument('--wandb_project', type=str, default='CycleTraining', help='Wandb project name (default: CycleTraining)')
