@@ -1,0 +1,5 @@
+__pycache__
+.conda
+wandb
+lightning_logs
+CycleTraining
