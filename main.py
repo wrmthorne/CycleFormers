@@ -16,26 +16,27 @@ class CycleModel(LightningModule):
     def __init__(self, model_a_name_or_path, task_a, data_a, data_a_val_size, data_b, data_b_val_size, model_b_name_or_path=None, task_b=None, batch_size=32):
         super().__init__()
         
+        self.task_a = task_a
         if not task_b:
-            task_b = task_a
+            self.task_b = task_a
 
         if not model_b_name_or_path:
             model_b_name_or_path = model_a_name_or_path
         
-        if task_a.upper() == 'CAUSAL_LM':
+        if self.task_a.upper() == 'CAUSAL_LM':
             self.model_a = AutoModelForCausalLM.from_pretrained(model_a_name_or_path)
-        elif task_a.upper() == 'SEQ2SEQ_LM':
+        elif self.task_a.upper() == 'SEQ2SEQ_LM':
             self.model_a = AutoModelForSeq2SeqLM.from_pretrained(model_a_name_or_path)
         else:
-            raise ValueError(f'Unknown task {task_a}')
+            raise ValueError(f'Unknown task {self.task_a}')
 
-        if task_b.upper() == 'CAUSAL_LM':
+        if self.task_b.upper() == 'CAUSAL_LM':
             self.model_b = AutoModelForCausalLM.from_pretrained(model_b_name_or_path)
-        elif task_b.upper() == 'SEQ2SEQ_LM':
+        elif self.task_b.upper() == 'SEQ2SEQ_LM':
             print('t5')
             self.model_b = AutoModelForSeq2SeqLM.from_pretrained(model_b_name_or_path)
         else:
-            raise ValueError(f'Unknown task {task_b}')
+            raise ValueError(f'Unknown task {self.task_b}')
 
         self.tokenizer_a = AutoTokenizer.from_pretrained(model_a_name_or_path)
         self.tokenizer_b = AutoTokenizer.from_pretrained(model_b_name_or_path)
@@ -75,52 +76,72 @@ class CycleModel(LightningModule):
     def _cycle_causal(self, batch, generating_model, training_model, generating_tokenizer, training_tokenizer):
         # Input --GenModel.generate>> Input + ResponseA
         # ResponseA + Input --TrainModel.__call__>> Reconstruction Loss
-
-        # 1. Generate ResponseA
-        # 2. Set response as input and input as response
-        # 3. Retokenize ResponseA + input to training tokenizer
-        # 4. Call model with ResponseA + input to get loss
-
-        input_a, attention_mask = batch['input_ids'], batch['attention_mask']
-        input_response_a = generating_model.generate(
-            input_ids      = input_a.to(self.device),
+        prompt_gen, attention_mask = batch['input_ids'], batch['attention_mask']
+        prompt_response_gen = generating_model.generate(
+            input_ids      = prompt_gen.to(self.device),
             attention_mask = attention_mask.to(self.device),
             )
         
-        response_a = input_response_a[:, input_a.shape[-1]:]
-        labels = torch.cat((response_a.to(self.device), input_a), dim=1)
+        # Split response from prompt
+        response_gen = prompt_response_gen[:, prompt_gen.shape[-1]:]
 
-        pad_size = labels.shape[-1] - response_a.shape[-1]
+        # Switch generator models prompt and response to be new labels
+        labels = torch.cat((response_gen.to(self.device), prompt_gen), dim=1)
+        labels[labels==self.tokenizer.pad_token_id] = -100
+
+        # pad new input to match label size
+        pad_size = labels.shape[-1] - response_gen.shape[-1]
         pad_tensor = torch.full((labels.shape[0], pad_size), training_tokenizer.pad_token_id)
-
-        input_b = torch.cat((pad_tensor.to(self.device), response_a), dim=-1)
-        attention_mask_b = torch.ones_like(input_b)
-        labels = torch.cat((response_a, input_a), dim=1)
+        prompt_train = torch.cat((pad_tensor.to(self.device), response_gen), dim=-1)
+        attention_mask_train = torch.ones_like(prompt_train)
 
         outputs = training_model(
-            input_ids      = input_b.to(self.device),
-            attention_mask = attention_mask_b.to(self.device),
+            input_ids      = prompt_train.to(self.device),
+            attention_mask = attention_mask_train.to(self.device),
             labels         = labels.to(self.device)
             )
         
         return outputs
     
+    def _cycle_seq2seq(self, batch, generating_model, training_model, generating_tokenizer, training_tokenizer):
+        input_gen, attention_mask_gen = batch['input_ids'], batch['attention_mask']
+        response_gen = generating_model.generate(
+            input_ids      = input_gen.to(self.device),
+            attention_mask = attention_mask_gen.to(self.device),
+            )
+        
+        input_train = response_gen[:, 1:] # remove leading pad token
+        attention_mask_train = torch.ones_like(input_train)
+        labels = input_gen
+        labels[labels==training_tokenizer.pad_token_id] = -100
+
+        outputs = training_model(
+            input_ids      = input_train.to(self.device),
+            attention_mask = attention_mask_train.to(self.device),
+            labels         = labels.to(self.device)
+            )
+        
+        return outputs
+
     def training_step(self, batch, batch_idx):
         opt_a, opt_b = self.optimizers()
+        sch_a, sch_b = self.lr_schedulers()
         
         if batch['a']:
-            loss_a = self._cycle_causal(batch['a'], self.model_b, self.model_a, self.tokenizer_b, self.tokenizer_a).loss
+            loss_a = self._cycle_seq2seq(batch['a'], self.model_b, self.model_a, self.tokenizer_b, self.tokenizer_a).loss
             self.manual_backward(loss_a)
             opt_a.step()
+            sch_a.step()
             opt_a.zero_grad()
 
             self.log('train_loss_a', loss_a, on_step=True, logger=True)
             self.log('opt_a_lr', opt_a.param_groups[0]['lr'], on_step=True, logger=True)
 
         if batch['b']:
-            loss_b = self._cycle_causal(batch['b'], self.model_a, self.model_b, self.tokenizer_a, self.tokenizer_b).loss
+            loss_b = self._cycle_seq2seq(batch['b'], self.model_a, self.model_b, self.tokenizer_a, self.tokenizer_b).loss
             self.manual_backward(loss_b)
             opt_b.step()
+            sch_b.step()
             opt_b.zero_grad()
 
             self.log('train_loss_b', loss_b, on_step=True, logger=True)
