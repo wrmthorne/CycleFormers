@@ -51,7 +51,6 @@ See `data/example` as an example for DatasetDict.
 ### JSON & JSONL
 Only allows for training data, no validation data can be supplied. If you want to use validation data, please use one of the other listed formats.
 ```json
-# JSON
 [
     {"text": "this is some text"},
     {"text": "this is some other text"}
@@ -59,7 +58,6 @@ Only allows for training data, no validation data can be supplied. If you want t
 ```
 
 ```json
-# JSONL
 {"text": "this is some text"}
 {"text": "this is some other text"}
 ```
