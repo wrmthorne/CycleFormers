@@ -30,7 +30,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name_or_path', type=str, default='gpt2', help='Model name or path to model for model A (default: gpt2)')
-    parser.add_argument('--output_dir', type=str, default='models', help='Path to save model checkpoints (default: models)')
+    parser.add_argument('--output_dir', type=str, default='models/example', help='Path to save model checkpoints (default: models/example)')
     parser.add_argument('--data_a', type=str, default='data/example/A', help='Path to data for model A. If this a validation set can be found, it will be loaded (default: data/example/A))')
     parser.add_argument('--data_b', type=str, default='data/example/B', help='Path to data for model B. If this a validation set can be found, it will be loaded (default: data/example/B)))')
     parser.add_argument('--task', type=str, default='causal_lm', help='Task for model A (default: causal_lm))')

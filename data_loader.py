@@ -63,7 +63,10 @@ class TestDataset(object):
             data = load_from_disk(data_path)
         else:
             load_dataset(data_path)
-            
-        data['train'] = data['train'].map(lambda x: self.tokenize(x['text']), remove_columns=['text'])
+        
+        if 'test' not in data.keys():
+            data['test'] = data['train']
+        
+        data['test'] = data['test'].map(lambda x: self.tokenize(x['text']), remove_columns=['text'])
 
-        return data['train']
+        return data['test']
