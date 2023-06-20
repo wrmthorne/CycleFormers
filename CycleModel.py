@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
 from transformers import DataCollatorForSeq2Seq
 import torch
-from data_loader import TextDataset
+from data_loader import TrainDataset
 from lightning.pytorch.utilities import CombinedLoader
 
 class CycleModel(LightningModule):
@@ -35,8 +35,8 @@ class CycleModel(LightningModule):
         self.collator_a = DataCollatorForSeq2Seq(self.tokenizer, return_tensors='pt', padding=True)
         self.collator_b = DataCollatorForSeq2Seq(self.tokenizer, return_tensors='pt', padding=True)
 
-        self.train_data_a, self.val_data_a = TextDataset(self.tokenizer).load_data(data_a)
-        self.train_data_b, self.val_data_b = TextDataset(self.tokenizer).load_data(data_b)
+        self.train_data_a, self.val_data_a = TrainDataset(self.tokenizer).load_data(data_a)
+        self.train_data_b, self.val_data_b = TrainDataset(self.tokenizer).load_data(data_b)
 
         self.batch_size = batch_size
         self.gradient_accumulation_steps = gradient_accumulation_steps
@@ -152,9 +152,15 @@ class CycleModel(LightningModule):
         loader_b = DataLoader(self.train_data_b, self.batch_size, shuffle=True, collate_fn=self.collator_b)
         return CombinedLoader({"a": loader_a, "b": loader_b}, 'max_size')
 
-    def val_dataloader(self):
-        loader_a = DataLoader(self.val_data_a, self.batch_size, shuffle=True, collate_fn=self.collator_a)
-        loader_b = DataLoader(self.val_data_b, self.batch_size, shuffle=True, collate_fn=self.collator_b)
+    def val_dataloader(self):    
+        if self.val_data_a:
+            loader_a = DataLoader(self.val_data_a, self.batch_size, shuffle=True, collate_fn=self.collator_a)
+        else:
+            loader_a = {}
+        if self.val_data_b:
+            loader_b = DataLoader(self.val_data_b, self.batch_size, shuffle=True, collate_fn=self.collator_b)
+        else:
+            loader_b = {}
         return CombinedLoader({"a": loader_a, "b": loader_b}, 'max_size')
     
     def save_pretrained(self, path):

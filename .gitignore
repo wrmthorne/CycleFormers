@@ -5,3 +5,4 @@ lightning_logs
 CycleTraining
 *.arrow
 models
+.vscode
