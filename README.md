@@ -69,11 +69,15 @@ Can optionally contain a validation split for datasets A and/or B.
 DatasetDict({
     train: Dataset({
         features: ['text'],
-        num_rows: N
+        num_rows: L
     }),
     validation: Dataset({
         features: ['text', 'label'],
         num_rows: M
+    })
+    test: Dataset({
+        features: ['text', 'label'],
+        num_rows: N
     })
 })
 ```
