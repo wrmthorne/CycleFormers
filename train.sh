@@ -1,0 +1,12 @@
+python train.py \
+    --model_name_or_path gpt2 \
+    --task causal_lm \
+    --data_a data/conll2003/A \
+    --data_b data/conll2003/B \
+    --output_dir models/CycleNER \
+    --use_wandb \
+    --wandb_project cycle-lightning-ner \
+    --wandb_run_name test1-causal \
+    --train_batch_size 64 \
+    --lr_a 3e-4 \
+    --lr_b 3e-4 \
