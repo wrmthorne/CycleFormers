@@ -6,3 +6,4 @@ CycleTraining
 *.arrow
 models
 .vscode
+runs

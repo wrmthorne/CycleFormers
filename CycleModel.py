@@ -5,7 +5,7 @@ from pytorch_lightning import LightningModule
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
 from transformers import DataCollatorForSeq2Seq
-from data_loader import DataCollatorForCausalLM
+from utils.data_collator import DataCollatorForCausalLM
 import torch
 from data_loader import TrainDataset
 from lightning.pytorch.utilities import CombinedLoader
