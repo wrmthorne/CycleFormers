@@ -50,9 +50,9 @@ class TrainDataset(object):
         return data['train'], data['validation']
     
 
-class TestDataset(object):
+class InferenceDataset(object):
     def __init__(self, tokenizer, max_length=512):
-        super(TestDataset, self).__init__()
+        super(InferenceDataset, self).__init__()
 
         self.max_length = max_length
         self.tokenizer = tokenizer
@@ -81,7 +81,3 @@ class TestDataset(object):
         data['test'] = data['test'].map(lambda x: self.tokenize(x['text']), remove_columns=['text'])
 
         return data['test']
-    
-
-
-

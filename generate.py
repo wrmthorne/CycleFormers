@@ -1,6 +1,6 @@
 import argparse
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
-from data_loader import TestDataset
+from utils.datasets import InferenceDataset
 from torch.utils.data import DataLoader
 from transformers import DataCollatorForSeq2Seq
 
@@ -15,7 +15,7 @@ def main(args):
     else:
         raise ValueError(f'Unknown task {args.task}')
     
-    test_data = TestDataset(tokenizer).load_data(args.data_path)
+    test_data = InferenceDataset(tokenizer).load_data(args.data_path)
     collator = DataCollatorForSeq2Seq(tokenizer, return_tensors='pt', padding=True)
     test_loader = DataLoader(test_data, batch_size=1, shuffle=False, collate_fn=collator)
 

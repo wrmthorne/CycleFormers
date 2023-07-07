@@ -2,7 +2,6 @@ import argparse
 from pytorch_lightning import seed_everything, Trainer
 from pytorch_lightning.loggers import WandbLogger
 from CycleModel import CycleModel
-import torch
 
 def main(args):
     seed_everything(args.seed)

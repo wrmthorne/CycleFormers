@@ -6,8 +6,8 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
 from transformers import DataCollatorForSeq2Seq
 from utils.data_collator import DataCollatorForCausalLM
+from utils.datasets import TrainDataset
 import torch
-from data_loader import TrainDataset
 from lightning.pytorch.utilities import CombinedLoader
 
 class CycleModel(LightningModule):
