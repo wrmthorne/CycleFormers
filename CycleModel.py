@@ -1,55 +1,99 @@
-import argparse
 from torch.optim import Adam
 from torch.optim.lr_scheduler import LambdaLR
 from pytorch_lightning import LightningModule
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSeq2SeqLM,
+    AutoModelForCausalLM,
+    BitsAndBytesConfig,
+    GenerationConfig,
+)
+from peft import (
+    prepare_model_for_kbit_training,
+    LoraConfig,
+    get_peft_model,
+    LoraLayer,
+)
 from transformers import DataCollatorForSeq2Seq
 from utils.data_collator import DataCollatorForCausalLM
 from utils.datasets import TrainDataset
 import torch
 from lightning.pytorch.utilities import CombinedLoader
 
+
+def load_model(hparams):
+    if hparams.task.upper() == 'CAUSAL_LM':
+        model_type = AutoModelForCausalLM
+    elif hparams.task.upper() == 'SEQ2SEQ_LM':
+        model_type = AutoModelForSeq2SeqLM
+
+    model = model_type.from_pretrained(
+        hparams.model_name_or_path,
+        load_in_4bit=(hparams.bits == 4),
+        load_in_8bit=(hparams.bits == 8),
+        quantization_config=hparams.quantisation_config,
+        torch_dtype=(torch.float32 if hparams.fp16 else (torch.bfloat16 if hparams.bf16 else torch.float32)))
+    
+    config = LoraConfig(
+        r=hparams.lora_r,
+        lora_alpha=hparams.lora_alpha,
+        target_modules=hparams.modules,
+        lora_dropout=hparams.lora_dropout,
+        bias="none" if not hparams.lora_bias else hparams.lora_bias,
+        task_type="CAUSAL_LM" if hparams.task == 'causal_lm' else "SEQ2SEQ_LM",
+    )
+    
+    if not hparams.full_finetune:
+        model = get_peft_model(model, config)
+
+    for name, module in model.named_modules():
+        if isinstance(module, LoraLayer):
+            if hparams.bf16:
+                module = module.to(torch.bfloat16)
+        if 'norm' in name:
+            module = module.to(torch.float32)
+        if 'lm_head' in name or 'embed_tokens' in name:
+            if hasattr(module, 'weight'):
+                if hparams.bf16 and module.weight.dtype == torch.float32:
+                    module = module.to(torch.bfloat16)
+
+    return model
+
+
 class CycleModel(LightningModule):
     def __init__(self,
-                model_name_or_path: str,
-                task: str = 'CAUSAL_LM',
-                data_a: str = None,
-                data_b: str = None,
-                lr_a: float = 2e-4,
-                lr_b: float = 2e-4,
-                train_batch_size: int = 8,
-                eval_batch_size: int = 8,
-                gradient_accumulation_steps: int = 1,
+                generation_config: GenerationConfig = None,
+                quantisation_config: BitsAndBytesConfig = None,
                 **kwargs
                 ):
         super().__init__()
 
-        self.task = task.upper()
+        self.task = self.hparams.task.upper()
 
         self.save_hyperparameters()
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        print(self.hparams)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.hparams.model_name_or_path)
 
         if not self.tokenizer.pad_token:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
+        self.model_a = load_model(self.hparams)
+        self.model_b = load_model(self.hparams)
+
         if self.task == 'CAUSAL_LM':
-            self.model_a = AutoModelForCausalLM.from_pretrained(model_name_or_path)
-            self.model_b = AutoModelForCausalLM.from_pretrained(model_name_or_path)
             self.tokenizer.padding_side = 'left'
             self.cycle = self._cycle_causal
             self.collator = DataCollatorForCausalLM(self.tokenizer, return_tensors='pt', padding=True)
         elif self.task == 'SEQ2SEQ_LM':
-            self.model_a = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
-            self.model_b = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
             self.cycle = self._cycle_seq2seq
             self.collator = DataCollatorForSeq2Seq(self.tokenizer, return_tensors='pt', padding=True)
         else:
             raise ValueError(f'Unknown task {self.task}. Must be one of "causal_lm" or "seq2seq_lm"')
             
 
-        self.train_data_a, self.val_data_a = TrainDataset(self.tokenizer, task=self.task).load_data(data_a)
-        self.train_data_b, self.val_data_b = TrainDataset(self.tokenizer, task=self.task).load_data(data_b)
+        self.train_data_a, self.val_data_a = TrainDataset(self.tokenizer, task=self.task).load_data(self.hparams.data_a)
+        self.train_data_b, self.val_data_b = TrainDataset(self.tokenizer, task=self.task).load_data(self.hparams.data_b)
 
         self.automatic_optimization = False
 
