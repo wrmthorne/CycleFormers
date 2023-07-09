@@ -21,10 +21,9 @@ class CycleModel(LightningModule):
                 ):
         super().__init__()
 
-        self.task = self.hparams.task.upper()
-
         self.save_hyperparameters()
-        print(self.hparams)
+        
+        self.task = self.hparams.task.upper()
         self.tokenizer = AutoTokenizer.from_pretrained(self.hparams.model_name_or_path)
 
         if not self.tokenizer.pad_token:

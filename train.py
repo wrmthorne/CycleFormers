@@ -20,6 +20,10 @@ class ModelArguments:
         default=False,
         metadata={"help": "Use bfloat16 (default: False)"}
     )
+    fp16: bool = field(
+        default=False,
+        metadata={"help": "Use float16 (default: False)"}
+    )
 
 @dataclass
 class DataArguments:
@@ -61,6 +65,18 @@ class TrainingArguments:
     output_dir: str = field(
         default='models/example',
         metadata={"help": "Path to save model checkpoints (default: models/example)"}
+    )
+    adam8bit: bool = field(
+        default=False,
+        metadata={"help": "Use 8-bit adam."}
+    )
+    double_quant: bool = field(
+        default=True,
+        metadata={"help": "Compress the quantization statistics through double quantization."}
+    )
+    quant_type: str = field(
+        default="nf4",
+        metadata={"help": "Quantization data type to use. Should be one of `fp4` or `nf4`."}
     )
     bits: int = field(
         default=None,
