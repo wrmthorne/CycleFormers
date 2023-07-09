@@ -1,7 +1,9 @@
 # CycleLightning
 A generic template script for cycle consistency training using pytorch lightning and the transformers library. The script trains each model on the output of the other iteratively. 
 
-`WARNING`: This script has only been tested on GPT2 and T5. If you find any irregularities, please open an issue and I will take a look when I can.
+`WARNING`: This script has only been tested on LLaMA, GPT2 and T5. If you find any irregularities, please open an issue and I will take a look when I can.
+
+`WARNING`: This script has not been tested on multi-GPU setups.
 
 ## Project Setup
 
@@ -80,4 +82,21 @@ DatasetDict({
         num_rows: N
     })
 })
+```
+
+## Quantisation and PEFT
+
+There is inbuilt integration with BitsAndBytes and LoRA modules. To enable LoRA, set the `full_finetune` flag to be false and set `bits` flag to 4 or 8 for 4- or 8-bit quantisation respectively. e.g.
+
+```bash
+python train.py --model_name_or_path <path to llama weights> --task 'causal_lm' --full_finetune False --bits 4
+```
+
+All LoRA parameters can be controlled through command line arguments.
+
+Automatically extracting the layers to add LoRA modules to is not 100% working e.g. for both GPT and T5. You can manually specify the layers to add LoRA modules to with a flag set in the following way:
+
+```bash
+# E.g. for T5
+--modules o v q wi_0 wi_1 # etc.
 ```

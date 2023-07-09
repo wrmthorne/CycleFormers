@@ -11,3 +11,6 @@ python train.py \
     --eval_batch_size 1 \
     --lr_a 3e-4 \
     --lr_b 3e-4 \
+    --full_finetune False \
+    --bits 4 \
+    --modules ['o', 'v']
