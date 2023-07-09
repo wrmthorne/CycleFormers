@@ -76,7 +76,7 @@ packaging==23.1
 pandas==2.0.2
 parso==0.8.3
 pathtools==0.1.2
-peft==0.4.0.dev0
+peft @ git+https://github.com/huggingface/peft.git
 pexpect==4.8.0
 pickleshare==0.7.5
 pip==23.1.2

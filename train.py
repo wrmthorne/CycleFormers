@@ -4,7 +4,7 @@ from pytorch_lightning.loggers import WandbLogger
 from CycleModel import CycleModel
 from transformers import HfArgumentParser, GenerationConfig
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 @dataclass
 class ModelArguments:
@@ -94,7 +94,7 @@ class TrainingArguments:
         default=0.0,
         metadata={"help":"Lora dropout (default: 0.0)"}
     )
-    modules: str = field(
+    modules: List[str] = field(
         default=None,
         metadata={"help": "Which modules to add LoRA modules to (default: All linear)"}
     )

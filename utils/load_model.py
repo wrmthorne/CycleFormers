@@ -11,6 +11,7 @@ from peft import (
 from peft.tuners.lora import LoraLayer
 import torch
 import bitsandbytes as bnb
+import json
 
 def print_trainable_parameters(args, model):
     """
@@ -66,6 +67,8 @@ def load_model(hparams):
     
     if hparams.modules is None:
         hparams.modules = find_all_linear_names(hparams, model)
+    else:
+        hparams.modules = json.loads(hparams.modules)
 
     if not hparams.full_finetune:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=hparams.gradient_checkpointing)
