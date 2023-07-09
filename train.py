@@ -79,8 +79,8 @@ class TrainingArguments:
         metadata={"help": "Quantization data type to use. Should be one of `fp4` or `nf4`."}
     )
     bits: int = field(
-        default=None,
-        metadata={"help": "Quantise model to n bits (default: None)"}
+        default=16,
+        metadata={"help": "Quantise model to n bits (default: 16)"}
     )
     lora_r: int = field(
         default=64,

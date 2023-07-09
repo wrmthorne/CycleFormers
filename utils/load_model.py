@@ -10,8 +10,22 @@ from peft import (
 )
 from peft.tuners.lora import LoraLayer
 import torch
-import bitsandbytes as bnb
+import BitsAndBytes as bnb
 
+def print_trainable_parameters(args, model):
+    """
+    Prints the number of trainable parameters in the model.
+    """
+    trainable_params = 0
+    all_param = 0
+
+    for _, param in model.named_parameters():
+        all_param += param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+
+    if args.bits == 4: trainable_params /= 2
+    print(f"trainable params: {trainable_params} || all params: {all_param} || trainable: {100 * trainable_params / all_param}")
 
 def find_all_linear_names(args, model):
     cls = bnb.nn.Linear4bit if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
@@ -32,6 +46,8 @@ def load_model(hparams):
         AutoModel = AutoModelForSeq2SeqLM
 
     compute_dtype = (torch.float16 if hparams.fp16 else (torch.bfloat16 if hparams.bf16 else torch.float32))
+
+    if hparams.full_finetune: assert hparams.bits in [16, 32]
 
     model = AutoModel.from_pretrained(
         hparams.model_name_or_path,
@@ -77,4 +93,5 @@ def load_model(hparams):
                 if hparams.bf16 and module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)
 
+    print_trainable_parameters(hparams, model)
     return model
