@@ -7,8 +7,8 @@ from peft import (
     prepare_model_for_kbit_training,
     LoraConfig,
     get_peft_model,
-    LoraLayer,
 )
+from peft.tuners.lora import LoraLayer
 import torch
 import BitsAndBytes as bnb
 
