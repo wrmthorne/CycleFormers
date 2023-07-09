@@ -10,7 +10,7 @@ from peft import (
 )
 from peft.tuners.lora import LoraLayer
 import torch
-import BitsAndBytes as bnb
+import bitsandbytes as bnb
 
 def print_trainable_parameters(args, model):
     """
@@ -69,6 +69,8 @@ def load_model(hparams):
 
     if not hparams.full_finetune:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=hparams.gradient_checkpointing)
+    if hparams.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
 
     config = LoraConfig(
         r=hparams.lora_r,

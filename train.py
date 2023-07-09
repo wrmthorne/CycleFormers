@@ -102,6 +102,14 @@ class TrainingArguments:
         default=None,
         metadata={"help": 'Whether to use bias in the lora layers (default: None)'}
     )
+    max_grad_norm: float = field(
+        default=0.3,
+        metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'}
+    )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={"help": 'Use gradient checkpointing. You want to use this.'}
+    )
     seed: int = field(
         default=42,
         metadata={"help": "Seed for reproducibility (default: 42)"}
