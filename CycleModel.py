@@ -146,10 +146,18 @@ class CycleModel(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         if batch['a']:
-            loss_a = self.model_a(**batch['a']).loss
+            loss_a = self.model_a(
+                input_ids=batch['a']['input_ids'],
+                attention_mask=batch['a']['attention_mask'],
+                labels=batch['a']['labels']
+            ).loss
             self.log('val_loss_a', loss_a, on_epoch=True, logger=True, batch_size=self.hparams.eval_batch_size)
         if batch['b']:
-            loss_b = self.model_b(**batch['b']).loss
+            loss_b = self.model_b(
+                input_ids=batch['b']['input_ids'],
+                attention_mask=batch['b']['attention_mask'],
+                labels=batch['b']['labels']
+            ).loss
             self.log('val_loss_b', loss_b, on_epoch=True, logger=True, batch_size=self.hparams.eval_batch_size)
 
     def train_dataloader(self):
