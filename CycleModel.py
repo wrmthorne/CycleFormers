@@ -20,7 +20,20 @@ from utils.data_collator import DataCollatorForCausalLM
 from utils.datasets import TrainDataset
 import torch
 from lightning.pytorch.utilities import CombinedLoader
+import BitsAndBytes as bnb
 
+
+def find_all_linear_names(args, model):
+    cls = bnb.nn.Linear4bit if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        if isinstance(module, cls):
+            names = name.split('.')
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+
+    if 'lm_head' in lora_module_names: # needed for 16-bit
+        lora_module_names.remove('lm_head')
+    return list(lora_module_names)
 
 def load_model(hparams):
     if hparams.task.upper() == 'CAUSAL_LM':
@@ -28,13 +41,26 @@ def load_model(hparams):
     elif hparams.task.upper() == 'SEQ2SEQ_LM':
         model_type = AutoModelForSeq2SeqLM
 
+    compute_dtype = (torch.float16 if hparams.fp16 else (torch.bfloat16 if hparams.bf16 else torch.float32))
+
     model = model_type.from_pretrained(
         hparams.model_name_or_path,
         load_in_4bit=(hparams.bits == 4),
         load_in_8bit=(hparams.bits == 8),
-        quantization_config=hparams.quantisation_config,
+        quantization_config=BitsAndBytesConfig(
+            load_in_4bit=hparams.bits == 4,
+            load_in_8bit=hparams.bits == 8,
+            llm_int8_threshold=6.0,
+            llm_int8_has_fp16_weight=False,
+            bnb_4bit_compute_dtype=compute_dtype,
+            bnb_4bit_use_double_quant=hparams.double_quant,
+            bnb_4bit_quant_type=hparams.quant_type # {'fp4', 'nf4'}
+        ),
         torch_dtype=(torch.float32 if hparams.fp16 else (torch.bfloat16 if hparams.bf16 else torch.float32)))
     
+    if hparams.modules is None:
+        hparams.modules = find_all_linear_names(hparams, model)
+
     config = LoraConfig(
         r=hparams.lora_r,
         lora_alpha=hparams.lora_alpha,

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.utils import PaddingStrategy
-from typing import Any, Callable, Dict, List, NewType, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 @dataclass
 class DataCollatorForCausalLM:

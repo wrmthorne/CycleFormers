@@ -1,15 +1,20 @@
 import os
-from datasets import load_from_disk, load_dataset
+from datasets import load_from_disk, load_dataset, Dataset
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from typing import List, Tuple, Dict
 
 class TrainDataset(object):
-    def __init__(self, tokenizer, task='CAUSAL_LM', max_length=512):
+    def __init__(self,
+                 tokenizer: PreTrainedTokenizerBase,
+                 task: str = 'CAUSAL_LM',
+                 max_length: int = 512):
         super(TrainDataset, self).__init__()
 
         self.max_length = max_length
         self.task = task.upper()
         self.tokenizer = tokenizer
 
-    def tokenize(self, text):
+    def tokenize(self, text: str) -> List[int]:
         result = self.tokenizer(
             text,
             truncation=True,
@@ -19,7 +24,7 @@ class TrainDataset(object):
 
         return result
     
-    def build_labels(self, example):
+    def build_labels(self, example: Dict[str, str]) -> List[int]:
         if self.task == 'CAUSAL_LM':
             return self.tokenize(example['text'] + ' ' + example['label'])['input_ids']
         elif self.task == 'SEQ2SEQ_LM':
@@ -27,7 +32,7 @@ class TrainDataset(object):
         else:
             raise ValueError(f'Unknown task {self.task}. Must be one of "causal_lm" or "seq2seq_lm"')
 
-    def load_data(self, data_path):
+    def load_data(self, data_path: str) -> Tuple[Dataset]:
         if data_path.endswith('.json') or data_path.endswith('.jsonl'):
             data = load_dataset('json', data_files=data_path)
         elif os.path.isdir(data_path):
@@ -51,13 +56,15 @@ class TrainDataset(object):
     
 
 class InferenceDataset(object):
-    def __init__(self, tokenizer, max_length=512):
+    def __init__(self,
+                 tokenizer: PreTrainedTokenizerBase,
+                 max_length: int = 512):
         super(InferenceDataset, self).__init__()
 
         self.max_length = max_length
         self.tokenizer = tokenizer
 
-    def tokenize(self, text):
+    def tokenize(self, text: str) -> List[int]:
         result = self.tokenizer(
             text,
             truncation=True,
@@ -67,7 +74,7 @@ class InferenceDataset(object):
 
         return result
     
-    def load_data(self, data_path):
+    def load_data(self, data_path: str) -> Dataset:
         if data_path.endswith('.json') or data_path.endswith('.jsonl'):
             data = load_dataset('json', data_files=data_path)
         elif os.path.isdir(data_path):
