@@ -10,7 +10,7 @@ from peft import (
 )
 from peft.tuners.lora import LoraLayer
 import torch
-import BitsAndBytes as bnb
+import bitsandbytes as bnb
 
 
 def find_all_linear_names(args, model):
