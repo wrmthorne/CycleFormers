@@ -107,7 +107,7 @@ class TrainingArguments:
         metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'}
     )
     gradient_checkpointing: bool = field(
-        default=True,
+        default=False,
         metadata={"help": 'Use gradient checkpointing. You want to use this.'}
     )
     seed: int = field(
