@@ -91,7 +91,6 @@ class CycleModel(LightningModule):
             input_ids         = prompt_train.to(self.device),
             attention_mask    = attention_mask_train.to(self.device),
             labels            = labels.to(self.device),
-            generation_config = self.hparams.generation_config,
             )
         
         return outputs
@@ -115,7 +114,6 @@ class CycleModel(LightningModule):
             input_ids         = input_train.to(self.device),
             attention_mask    = attention_mask_train.to(self.device),
             labels            = labels.to(self.device),
-            generation_config = self.hparams.generation_config,
             )
         
         return outputs
