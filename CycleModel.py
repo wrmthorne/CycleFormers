@@ -183,11 +183,3 @@ class CycleModel(LightningModule):
         self.model_b.save_pretrained(path + '/model_B')
         self.tokenizer.save_pretrained(path + '/model_A')
         self.tokenizer.save_pretrained(path + '/model_B')
-
-    @classmethod
-    def from_pretrained(cls, path):
-        model_a = cls.load_from_checkpoint(path + '/model_A')
-        model_b = cls.load_from_checkpoint(path + '/model_B')
-        
-        
-        return model_a, model_b
