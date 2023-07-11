@@ -68,9 +68,10 @@ class CycleModel(LightningModule):
         # ResponseA + Input --TrainModel.__call__>> Reconstruction Loss
         prompt_gen, attention_mask = batch['input_ids'], batch['attention_mask']
         prompt_response_gen = generating_model.generate(
-            input_ids      = prompt_gen.to(self.device),
-            attention_mask = attention_mask.to(self.device),
-            pad_token_id   = self.tokenizer.pad_token_id,
+            input_ids         = prompt_gen.to(self.device),
+            attention_mask    = attention_mask.to(self.device),
+            pad_token_id      = self.tokenizer.pad_token_id,
+            generation_config = self.hparams.generation_config
             )
         
         # Split response from prompt
@@ -87,9 +88,9 @@ class CycleModel(LightningModule):
         attention_mask_train = torch.cat((torch.zeros_like(pad_tensor.to(self.device)), torch.ones_like(response_gen)), dim=-1)
 
         outputs = training_model(
-            input_ids      = prompt_train.to(self.device),
-            attention_mask = attention_mask_train.to(self.device),
-            labels         = labels.to(self.device)
+            input_ids         = prompt_train.to(self.device),
+            attention_mask    = attention_mask_train.to(self.device),
+            labels            = labels.to(self.device),
             )
         
         return outputs
@@ -97,9 +98,10 @@ class CycleModel(LightningModule):
     def _cycle_seq2seq(self, batch, generating_model, training_model):
         input_gen, attention_mask_gen = batch['input_ids'], batch['attention_mask']
         response_gen = generating_model.generate(
-            input_ids      = input_gen.to(self.device),
-            attention_mask = attention_mask_gen.to(self.device),
-            pad_token_id   = self.tokenizer.pad_token_id,
+            input_ids         = input_gen.to(self.device),
+            attention_mask    = attention_mask_gen.to(self.device),
+            pad_token_id      = self.tokenizer.pad_token_id,
+            generation_config = self.hparams.generation_config,
             )
         
         input_train = response_gen[:, 1:] # remove leading pad token
@@ -109,9 +111,9 @@ class CycleModel(LightningModule):
         labels[labels==self.tokenizer.pad_token_id] = -100
 
         outputs = training_model(
-            input_ids      = input_train.to(self.device),
-            attention_mask = attention_mask_train.to(self.device),
-            labels         = labels.to(self.device)
+            input_ids         = input_train.to(self.device),
+            attention_mask    = attention_mask_train.to(self.device),
+            labels            = labels.to(self.device),
             )
         
         return outputs
