@@ -15,47 +15,32 @@ from lightning.pytorch.utilities import CombinedLoader
 
 
 class CycleModel(LightningModule):
-    def __init__(self,
-                generation_config: GenerationConfig = None,
-                **kwargs
-                ):
+    def __init__(self, **kwargs):
         super().__init__()
 
         self.save_hyperparameters()
         
-        self.task = self.hparams.task.upper()
-        self.tokenizer = AutoTokenizer.from_pretrained(self.hparams.model_name_or_path)
+        self.model_a, self.tokenizer_a, self.collator_a = load_model(self.hparams.model_A['training'])
+        self.model_b, self.tokenizer_b, self.collator_b = load_model(self.hparams.model_B['training'])
 
-        if not self.tokenizer.pad_token:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        self.model_a = load_model(self.hparams)
-        self.model_b = load_model(self.hparams)
+        self.generation_config_a = GenerationConfig(**self.hparams.model_A['generation'])
+        self.generation_config_b = GenerationConfig(**self.hparams.model_B['generation'])
 
-        if self.task == 'CAUSAL_LM':
-            self.tokenizer.padding_side = 'left'
-            self.cycle = self._cycle_causal
-            self.collator = DataCollatorForCausalLM(self.tokenizer, return_tensors='pt', padding=True)
-        elif self.task == 'SEQ2SEQ_LM':
-            self.cycle = self._cycle_seq2seq
-            self.collator = DataCollatorForSeq2Seq(self.tokenizer, return_tensors='pt', padding=True)
-        else:
-            raise ValueError(f'Unknown task {self.task}. Must be one of "causal_lm" or "seq2seq_lm"')
-            
-
-        self.train_data_a, self.val_data_a = TrainDataset(self.tokenizer, task=self.task).load_data(self.hparams.data_a)
-        self.train_data_b, self.val_data_b = TrainDataset(self.tokenizer, task=self.task).load_data(self.hparams.data_b)
+        self.train_data_a, self.val_data_a = TrainDataset(self.tokenizer_a, task=self.hparams.model_A['task']).load_data(self.hparams.model_A['data']['path'])
+        self.train_data_b, self.val_data_b = TrainDataset(self.tokenizer_b, task=self.hparams.model_B['task']).load_data(self.hparams.model_B['data']['path'])
 
         self.automatic_optimization = False
 
     def configure_optimizers(self):
         opt_a = Adam(
             self.model_a.parameters(),
-            lr=self.hparams.lr_a, betas=(0.5, 0.999))
+            lr=self.hparams.model_A['learning_rate'],
+            betas=(self.hparams.model_A['adam_beta1'], self.hparams.model_A['adam_beta2']))
         
         opt_b = Adam(
             self.model_b.parameters(),
-            lr=self.hparams.lr_b, betas=(0.5, 0.999))
+            lr=self.hparams.model_B['learning_rate'],
+            betas=(self.hparams.model_B['adam_beta1'], self.hparams.model_B['adam_beta2']))
         
         gamma = lambda epoch: 1 - max(0, epoch + 1 - 100) / 101
         sch_a = LambdaLR(opt_a, lr_lambda=gamma)
@@ -126,24 +111,24 @@ class CycleModel(LightningModule):
             loss_a = self.cycle(batch['a'], self.model_b, self.model_a).loss
             self.manual_backward(loss_a)
 
-            if batch_idx % self.hparams.gradient_accumulation_steps == 0:
+            if batch_idx % self.hparams.model_A['training']['gradient_accumulation_steps'] == 0:
                 opt_a.step()
                 sch_a.step()
                 opt_a.zero_grad()
 
-                self.log('train_loss_a', loss_a, on_step=True, logger=True, batch_size=self.hparams.train_batch_size)
+                self.log('train_loss_a', loss_a, on_step=True, logger=True, batch_size=self.hparams.model_A['training']['train_batch_size'])
                 self.log('opt_a_lr', opt_a.param_groups[0]['lr'], on_step=True, logger=True)
 
         if batch['b']:
             loss_b = self.cycle(batch['b'], self.model_a, self.model_b).loss
             self.manual_backward(loss_b)
 
-            if batch_idx % self.hparams.gradient_accumulation_steps == 0:
+            if batch_idx % self.hparams.model_B['training']['gradient_accumulation_steps'] == 0:
                 opt_b.step()
                 sch_b.step()
                 opt_b.zero_grad()
 
-                self.log('train_loss_b', loss_b, on_step=True, logger=True, batch_size=self.hparams.train_batch_size)
+                self.log('train_loss_b', loss_b, on_step=True, logger=True, batch_size=self.hparams.model_B['training']['train_batch_size'])
                 self.log('opt_b_lr', opt_b.param_groups[0]['lr'], on_step=True, logger=True)
 
     def validation_step(self, batch, batch_idx):

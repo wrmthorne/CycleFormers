@@ -1,0 +1,44 @@
+model_name_or_path: gpt2
+task: null
+bf16: False
+fp16: False
+
+training:
+  full_finetune: True
+  learning_rate: 2e-4
+  train_batch_size: 2
+  eval_batch_size: 2
+  gradient_accumulation_steps: 1
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam8bit: False
+  double_quant: True
+  quant_type: nf4
+  bits: 4
+  lora_r: 64
+  lora_alpha: 16
+  lora_dropout: 0.0
+  lora_bias: null
+  modules: null
+  max_grad_norms: 0.3
+  gradient_checkpointing: False # TODO: fix checkpointing not working
+
+data:
+  path: data/example/A
+
+generation:
+  max_length: 128
+  min_new_tokens: null
+  do_sample: False
+  num_beams: 1
+  num_beam_groups: 1
+  penalty_alpha: null
+  use_cache: True
+  temperature: 1.0
+  top_k: 50
+  top_p: 1.0
+  typical_p: 1.0
+  diversity_penalty: 0.0
+  repetition_penalty: 1.0
+  length_penalty: 1.0
+  no_repeat_ngram_size: 0

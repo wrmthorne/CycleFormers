@@ -5,6 +5,8 @@ from CycleModel import CycleModel
 from transformers import HfArgumentParser, GenerationConfig
 from dataclasses import dataclass, field
 from typing import Optional, List
+import yaml
+import os
 
 @dataclass
 class ModelArguments:
@@ -188,27 +190,36 @@ def main():
         **vars(model_args), **vars(data_args), **vars(training_args)
     )
 
-    seed_everything(args.seed)
+    with open('configs/model_A_config.yaml', 'r') as f:
+        model_A_config = yaml.safe_load(f)
 
-    print(f'Unused arguments: {extra_args}')
+    with open('configs/model_B_config.yaml', 'r') as f:
+        model_B_config = yaml.safe_load(f)
 
-    model = CycleModel(
-        **args.__dict__,
-        generation_config=generation_config,
-    )
+    config = {
+        'model_A': model_A_config,
+        'model_B': model_B_config,
+    }
+
+    with open('configs/lightning_config.yaml', 'r') as f:
+        lightning_config = yaml.safe_load(f)
+
+    seed_everything(lightning_config.seed)
+
+    model = CycleModel(config)
 
     trainer = Trainer(
-        default_root_dir=args.output_dir + '/checkpoints',
-        max_epochs=lightning_args.num_epochs,
-        log_every_n_steps=lightning_args.log_every_n_steps,
-        val_check_interval=lightning_args.val_check_interval,
+        default_root_dir=os.path.join(lightning_config.output_dir + '/checkpoints'),
+        max_epochs=lightning_config.num_epochs,
+        log_every_n_steps=lightning_config.log_every_n_steps,
+        val_check_interval=lightning_config.val_check_interval,
     )
-    if lightning_args.use_wandb:
-        trainer.logger = WandbLogger(project=lightning_args.wandb_project, entity=lightning_args.wandb_entity, name=lightning_args.wandb_run_name)
+    if lightning_config.use_wandb:
+        trainer.logger = WandbLogger(project=lightning_config.wandb_project, entity=lightning_config.wandb_entity, name=lightning_config.wandb_run_name)
     trainer.fit(model)
 
     # Save the models separately for use in inference
-    model.save_pretrained(args.output_dir)
+    model.save_pretrained(lightning_config.output_dir)
 
 if __name__ == "__main__":
     main()

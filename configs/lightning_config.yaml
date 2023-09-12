@@ -1,0 +1,10 @@
+seed: 42
+log_every_n_steps: 100
+val_check_interval: 1.0
+use_wandb: False
+num_epochs: 1
+wandb_project: cycle-lightning
+wandb_entity: null
+wandb_run_name: null
+output_dir: models
+
