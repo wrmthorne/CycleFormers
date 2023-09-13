@@ -94,7 +94,7 @@ class CausalCycle(Cycle):
         input_ids, attention_mask = self.tokenizer.batch_encode_plus(batch['labels'], return_tensors='pt', padding=True)
         labels = self.tokenizer.batch_encode_plus(batch['input'], return_tensors='pt', padding=True)['input_ids']
 
-        return {'input_ids': input_ids, 'attention_mask': attention_mask, 'response': labels}
+        return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': labels}
     
     def format(self, batch):
         input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
