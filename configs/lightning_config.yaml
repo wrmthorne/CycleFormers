@@ -7,4 +7,7 @@ wandb_project: cycle-lightning
 wandb_entity: null
 wandb_run_name: null
 output_dir: models
+accelerator: gpu
+devices: 1
+use_fast_cycle: True
 

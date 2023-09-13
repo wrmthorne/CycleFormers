@@ -2,16 +2,11 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import LambdaLR
 from pytorch_lightning import LightningModule
 from torch.utils.data import DataLoader
-from transformers import (
-    AutoTokenizer,
-    GenerationConfig,
-)
-from transformers import DataCollatorForSeq2Seq
-from utils.data_collator import DataCollatorForCausalLM
+from transformers import GenerationConfig
 from utils.datasets import TrainDataset
 from utils.load_model import load_model
-import torch
 from lightning.pytorch.utilities import CombinedLoader
+from cycles import initialise_cycle
 
 
 class CycleModel(LightningModule):
@@ -20,151 +15,121 @@ class CycleModel(LightningModule):
 
         self.save_hyperparameters()
         
-        self.model_a, self.tokenizer_a, self.collator_a = load_model(self.hparams.model_A['training'])
-        self.model_b, self.tokenizer_b, self.collator_b = load_model(self.hparams.model_B['training'])
+        self.model_A, self.tokenizer_A, self.collator_A = load_model(self.hparams.model_A)
+        self.model_B, self.tokenizer_B, self.collator_B = load_model(self.hparams.model_B)
 
-        self.generation_config_a = GenerationConfig(**self.hparams.model_A['generation'])
-        self.generation_config_b = GenerationConfig(**self.hparams.model_B['generation'])
+        self.generation_config_A = GenerationConfig(**self.hparams.model_A['generation'])
+        self.generation_config_B = GenerationConfig(**self.hparams.model_B['generation'])
 
-        self.train_data_a, self.val_data_a = TrainDataset(self.tokenizer_a, task=self.hparams.model_A['task']).load_data(self.hparams.model_A['data']['path'])
-        self.train_data_b, self.val_data_b = TrainDataset(self.tokenizer_b, task=self.hparams.model_B['task']).load_data(self.hparams.model_B['data']['path'])
+        self.train_data_A, self.val_data_A = TrainDataset(self.tokenizer_A,task=self.hparams.model_A['task']).load_data(self.hparams.model_A['data']['path'])
+        self.train_data_B, self.val_data_B = TrainDataset(self.tokenizer_B, task=self.hparams.model_B['task']).load_data(self.hparams.model_B['data']['path'])
+
+        self.cycle_A = initialise_cycle(
+            self.model_A,
+            self.tokenizer_A,
+            self.generation_config_A,
+            self.hparams.model_A['task'])
+        
+        self.cycle_B = initialise_cycle(
+            self.model_B,
+            self.tokenizer_B,
+            self.generation_config_B,
+            self.hparams.model_B['task'])
 
         self.automatic_optimization = False
 
+        if self.tokenizer_A.get_vocab() == self.tokenizer_B.get_vocab() and type(self.model_A) == type(self.model_B):
+            print('Same model and tokenizer detected. Using fast cycle. This can be manually disabled in the lightning config.')
+        
     def configure_optimizers(self):
-        opt_a = Adam(
-            self.model_a.parameters(),
-            lr=self.hparams.model_A['learning_rate'],
+        opt_A = Adam(
+            self.model_A.parameters(),
+            lr=float(self.hparams.model_A['learning_rate']),
             betas=(self.hparams.model_A['adam_beta1'], self.hparams.model_A['adam_beta2']))
         
-        opt_b = Adam(
-            self.model_b.parameters(),
-            lr=self.hparams.model_B['learning_rate'],
+        opt_B = Adam(
+            self.model_B.parameters(),
+            lr=float(self.hparams.model_B['learning_rate']),
             betas=(self.hparams.model_B['adam_beta1'], self.hparams.model_B['adam_beta2']))
         
         gamma = lambda epoch: 1 - max(0, epoch + 1 - 100) / 101
-        sch_a = LambdaLR(opt_a, lr_lambda=gamma)
-        sch_b = LambdaLR(opt_b, lr_lambda=gamma)
-        return [opt_a, opt_b], [sch_a, sch_b]
+        sch_A = LambdaLR(opt_A, lr_lambda=gamma)
+        sch_B = LambdaLR(opt_B, lr_lambda=gamma)
+        return [opt_A, opt_B], [sch_A, sch_B]
     
-
-    def _cycle_causal(self, batch, generating_model, training_model):
-        # Input --GenModel.generate>> Input + ResponseA
-        # ResponseA + Input --TrainModel.__call__>> Reconstruction Loss
-        prompt_gen, attention_mask = batch['input_ids'], batch['attention_mask']
-        prompt_response_gen = generating_model.generate(
-            input_ids         = prompt_gen.to(self.device),
-            attention_mask    = attention_mask.to(self.device),
-            pad_token_id      = self.tokenizer.pad_token_id,
-            generation_config = self.hparams.generation_config
-            )
-        
-        # Split response from prompt
-        response_gen = prompt_response_gen[:, prompt_gen.shape[-1]:]
-
-        # Switch generator models prompt and response to be new labels
-        labels = torch.cat((response_gen.to(self.device), prompt_gen), dim=1)
-        labels[labels==self.tokenizer.pad_token_id] = -100
-
-        # pad new input to match label size        
-        pad_size = labels.shape[-1] - response_gen.shape[-1]
-        pad_tensor = torch.full((labels.shape[0], pad_size), self.tokenizer.pad_token_id)
-        prompt_train = torch.cat((pad_tensor.to(self.device), response_gen), dim=-1)
-        attention_mask_train = torch.cat((torch.zeros_like(pad_tensor.to(self.device)), torch.ones_like(response_gen)), dim=-1)
-
-        outputs = training_model(
-            input_ids         = prompt_train.to(self.device),
-            attention_mask    = attention_mask_train.to(self.device),
-            labels            = labels.to(self.device),
-            )
-        
-        return outputs
-    
-    def _cycle_seq2seq(self, batch, generating_model, training_model):
-        input_gen, attention_mask_gen = batch['input_ids'], batch['attention_mask']
-        response_gen = generating_model.generate(
-            input_ids         = input_gen.to(self.device),
-            attention_mask    = attention_mask_gen.to(self.device),
-            pad_token_id      = self.tokenizer.pad_token_id,
-            generation_config = self.hparams.generation_config,
-            )
-        
-        input_train = response_gen[:, 1:] # remove leading pad token
-        attention_mask_train = torch.ones_like(input_train)
-        attention_mask_train[input_train==self.tokenizer.pad_token_id] = 0 # Set padding tokens to 0
-        labels = input_gen
-        labels[labels==self.tokenizer.pad_token_id] = -100
-
-        outputs = training_model(
-            input_ids         = input_train.to(self.device),
-            attention_mask    = attention_mask_train.to(self.device),
-            labels            = labels.to(self.device),
-            )
-        
-        return outputs
+    def cycle(self, gen_cycle, train_cycle, batch):
+        if self.tokenizer_A.get_vocab() == self.tokenizer_B.get_vocab() and type(self.model_A) == type(self.model_B):
+            generated = gen_cycle.generate(batch)
+            formated = train_cycle.format(generated)
+            return train_cycle.train(formated)
+        else:
+            generated = gen_cycle.generate(batch)
+            decoded = gen_cycle.decode(generated)
+            formated = train_cycle.encode_and_format(decoded)
+            return train_cycle.train(formated)
 
     def training_step(self, batch, batch_idx):
-        opt_a, opt_b = self.optimizers()
-        sch_a, sch_b = self.lr_schedulers()
+        opt_A, opt_B = self.optimizers()
+        sch_A, sch_B = self.lr_schedulers()
         
         if batch['a']:
-            loss_a = self.cycle(batch['a'], self.model_b, self.model_a).loss
-            self.manual_backward(loss_a)
+            loss_A = self.cycle(self.cycle_A, batch['a']).loss
+            self.manual_backward(loss_A)
 
-            if batch_idx % self.hparams.model_A['training']['gradient_accumulation_steps'] == 0:
-                opt_a.step()
-                sch_a.step()
-                opt_a.zero_grad()
+            if batch_idx % self.hparams.model_A['gradient_accumulation_steps'] == 0:
+                opt_A.step()
+                sch_A.step()
+                opt_A.zero_grad()
 
-                self.log('train_loss_a', loss_a, on_step=True, logger=True, batch_size=self.hparams.model_A['training']['train_batch_size'])
-                self.log('opt_a_lr', opt_a.param_groups[0]['lr'], on_step=True, logger=True)
+                self.log('train_loss_A', loss_A, on_step=True, logger=True, batch_size=self.hparams.model_A['train_batch_size'])
+                self.log('opt_A_lr', opt_A.param_groups[0]['lr'], on_step=True, logger=True)
 
         if batch['b']:
-            loss_b = self.cycle(batch['b'], self.model_a, self.model_b).loss
-            self.manual_backward(loss_b)
+            loss_B = self.cycle(self.cycle_B, batch['b']).loss
+            self.manual_backward(loss_B)
 
-            if batch_idx % self.hparams.model_B['training']['gradient_accumulation_steps'] == 0:
-                opt_b.step()
-                sch_b.step()
-                opt_b.zero_grad()
+            if batch_idx % self.hparams.model_B['gradient_accumulation_steps'] == 0:
+                opt_B.step()
+                sch_B.step()
+                opt_B.zero_grad()
 
-                self.log('train_loss_b', loss_b, on_step=True, logger=True, batch_size=self.hparams.model_B['training']['train_batch_size'])
-                self.log('opt_b_lr', opt_b.param_groups[0]['lr'], on_step=True, logger=True)
+                self.log('train_loss_B', loss_B, on_step=True, logger=True, batch_size=self.hparams.model_B['train_batch_size'])
+                self.log('opt_B_lr', opt_B.param_groups[0]['lr'], on_step=True, logger=True)
 
     def validation_step(self, batch, batch_idx):
         if batch['a']:
-            loss_a = self.model_a(
+            loss_A = self.model_A(
                 input_ids=batch['a']['input_ids'],
                 attention_mask=batch['a']['attention_mask'],
                 labels=batch['a']['labels']
             ).loss
-            self.log('val_loss_a', loss_a, on_epoch=True, logger=True, batch_size=self.hparams.eval_batch_size)
+            self.log('val_loss_A', loss_A, on_epoch=True, logger=True, batch_size=self.hparams.model_A['eval_batch_size'])
         if batch['b']:
-            loss_b = self.model_b(
+            loss_B = self.model_B(
                 input_ids=batch['b']['input_ids'],
                 attention_mask=batch['b']['attention_mask'],
                 labels=batch['b']['labels']
             ).loss
-            self.log('val_loss_b', loss_b, on_epoch=True, logger=True, batch_size=self.hparams.eval_batch_size)
+            self.log('val_loss_B', loss_B, on_epoch=True, logger=True, batch_size=self.hparams.model_B['eval_batch_size'])
 
     def train_dataloader(self):
-        loader_a = DataLoader(self.train_data_a, self.hparams.train_batch_size, shuffle=True, collate_fn=self.collator)
-        loader_b = DataLoader(self.train_data_b, self.hparams.train_batch_size, shuffle=True, collate_fn=self.collator)
-        return CombinedLoader({"a": loader_a, "b": loader_b}, 'max_size')
+        loader_A = DataLoader(self.train_data_A, self.hparams.model_A['train_batch_size'], shuffle=True, collate_fn=self.collator_A)
+        loader_B = DataLoader(self.train_data_B, self.hparams.model_B['train_batch_size'], shuffle=True, collate_fn=self.collator_B)
+        return CombinedLoader({"a": loader_A, "b": loader_B}, 'max_size')
 
     def val_dataloader(self):    
-        if self.val_data_a:
-            loader_a = DataLoader(self.val_data_a, self.hparams.eval_batch_size, shuffle=True, collate_fn=self.collator)
+        if self.val_data_A:
+            loader_A = DataLoader(self.val_data_A, self.hparams.model_A['eval_batch_size'], shuffle=True, collate_fn=self.collator_A)
         else:
-            loader_a = {}
-        if self.val_data_b:
-            loader_b = DataLoader(self.val_data_b, self.hparams.eval_batch_size, shuffle=True, collate_fn=self.collator)
+            loader_A = {}
+        if self.val_data_B:
+            loader_B = DataLoader(self.val_data_B, self.hparams.model_B['eval_batch_size'], shuffle=True, collate_fn=self.collator_B)
         else:
-            loader_b = {}
-        return CombinedLoader({"a": loader_a, "b": loader_b}, 'max_size')
+            loader_B = {}
+        return CombinedLoader({"a": loader_A, "b": loader_B}, 'max_size')
     
     def save_pretrained(self, path):
-        self.model_a.save_pretrained(path + '/model_A')
-        self.model_b.save_pretrained(path + '/model_B')
-        self.tokenizer.save_pretrained(path + '/model_A')
-        self.tokenizer.save_pretrained(path + '/model_B')
+        self.model_A.save_pretrained(path + '/model_A')
+        self.model_B.save_pretrained(path + '/model_B')
+        self.tokenizer_A.save_pretrained(path + '/model_A')
+        self.tokenizer_B.save_pretrained(path + '/model_B')

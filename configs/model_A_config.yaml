@@ -2,26 +2,24 @@ model_name_or_path: gpt2
 task: null
 bf16: False
 fp16: False
-
-training:
-  full_finetune: True
-  learning_rate: 2e-4
-  train_batch_size: 2
-  eval_batch_size: 2
-  gradient_accumulation_steps: 1
-  adam_beta1: 0.9
-  adam_beta2: 0.95
-  adam8bit: False
-  double_quant: True
-  quant_type: nf4
-  bits: 4
-  lora_r: 64
-  lora_alpha: 16
-  lora_dropout: 0.0
-  lora_bias: null
-  modules: null
-  max_grad_norms: 0.3
-  gradient_checkpointing: False # TODO: fix checkpointing not working
+full_finetune: True
+learning_rate: 2e-4
+train_batch_size: 2
+eval_batch_size: 2
+gradient_accumulation_steps: 1
+adam_beta1: 0.9
+adam_beta2: 0.95
+adam8bit: False
+double_quant: True
+quant_type: nf4
+bits: 16
+lora_r: 64
+lora_alpha: 16
+lora_dropout: 0.0
+lora_bias: null
+modules: null
+max_grad_norms: 0.3
+gradient_checkpointing: False # TODO: fix checkpointing not working
 
 data:
   path: data/example/A
