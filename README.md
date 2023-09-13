@@ -11,22 +11,16 @@ Required libraries can be installed using the `requirements.txt` file with pip, 
 
 ## Training
 
-The script currently only supports models A and B being the same*. The two current supported generation types are causal and seq2seq.
+The hyperparameters for each model can be set in the `configs` directory. Model A and model B can be any causal or seq2seq model and they don't need to match. If they do match and the tokenizers are the same, the training will be faster as token decoding and reencoding is not necessary. Running the script is as simple as:
 
 ```bash
-# Causal example
-python train.py --model_name_or_path gpt2 --task causal_lm
-
-# Seq2Seq example
-python train.py --model_name_or_path t5-small --task seq2seq_lm
+python train.py
 ```
 
 All script arguments can be found with:
 ```bash
 python train.py --help
 ```
-
-\* This may change in the future to allow e.g. model A to be causal and model B to be seq2seq.
 
 ## Data Format
 

@@ -73,7 +73,7 @@ class CycleModel(LightningModule):
         sch_A, sch_B = self.lr_schedulers()
         
         if batch['a']:
-            loss_A = self.cycle(self.cycle_A, batch['a']).loss
+            loss_A = self.cycle(self.cycle_A, self.cycle_B, batch['a']).loss
             self.manual_backward(loss_A)
 
             if batch_idx % self.hparams.model_A['gradient_accumulation_steps'] == 0:
@@ -85,7 +85,7 @@ class CycleModel(LightningModule):
                 self.log('opt_A_lr', opt_A.param_groups[0]['lr'], on_step=True, logger=True)
 
         if batch['b']:
-            loss_B = self.cycle(self.cycle_B, batch['b']).loss
+            loss_B = self.cycle(self.cycle_B, self.cycle_A, batch['b']).loss
             self.manual_backward(loss_B)
 
             if batch_idx % self.hparams.model_B['gradient_accumulation_steps'] == 0:

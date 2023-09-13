@@ -4,8 +4,8 @@ bf16: False
 fp16: False
 full_finetune: True
 learning_rate: 2e-4
-train_batch_size: 2
-eval_batch_size: 2
+train_batch_size: 32
+eval_batch_size: 32
 gradient_accumulation_steps: 1
 adam_beta1: 0.9
 adam_beta2: 0.95
@@ -22,7 +22,7 @@ max_grad_norms: 0.3
 gradient_checkpointing: False # TODO: fix checkpointing not working
 
 data:
-  path: data/example/A
+  path: data/conll2003/A
 
 generation:
   max_length: 128
