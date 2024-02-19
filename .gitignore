@@ -7,3 +7,6 @@ CycleTraining
 models
 .vscode
 runs
+dist
+*.egg-info
+build

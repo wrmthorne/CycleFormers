@@ -1,0 +1,9 @@
+model:
+  model_name_or_path: gpt2
+
+generation:
+  max_length: 128
+  do_sample: true
+  top_k: 0
+  top_p: 0.9
+  temperature: 0.7
