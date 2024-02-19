@@ -4,7 +4,6 @@ wandb
 lightning_logs
 CycleTraining
 *.arrow
-models
 .vscode
 runs
 dist
