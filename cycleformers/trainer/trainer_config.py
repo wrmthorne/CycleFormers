@@ -115,6 +115,7 @@ class TrainerConfig:
         default=None,
         metadata={'help': 'Whether to enable model summarization by default. Default: True.'}
     )
+    # ====================
     accumulate_grad_batches: int = field(
         default=1,
         metadata={'help': 'Accumulates gradients over k batches before stepping the optimizer. Default: 1.'}
@@ -127,6 +128,7 @@ class TrainerConfig:
         default=None,
         metadata={'help': 'The gradient clipping algorithm to use. Pass gradient_clip_algorithm="value" to clip by value, and gradient_clip_algorithm="norm" to clip by norm. By default it will be set to "norm".'}
     )
+    # ===================
     deterministic: Optional[Union[bool, _LITERAL_WARN]] = field(
         default=None,
         metadata={'help': 'If True, sets whether PyTorch operations must use deterministic algorithms. Set to "warn" to use deterministic algorithms whenever possible, throwing warnings on operations that don\'t support deterministic mode. If not set, defaults to False. Default: None.'}
@@ -172,4 +174,6 @@ class TrainerConfig:
         metadata={'help': 'Default path for logs and weights when no logger/ckpt_callback passed. Default: os.getcwd(). Can be remote file paths such as s3://mybucket/path or hdfs://path/'}
     )
 
+    def to_dict(self):
+        return self.__dict__
             

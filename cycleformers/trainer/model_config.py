@@ -1,8 +1,7 @@
 from dataclasses import dataclass, field
+import math
 from peft import PeftConfig
-from transformers.training_args import OptimizerNames
-from transformers import Trainer
-from typing import List, Optional
+from typing import Optional
 
 @dataclass
 class ModelConfig:
@@ -95,17 +94,24 @@ class ModelConfig:
         default=None,
         metadata={'help': 'The Hugging Face model hub token.'}
     )
+    padding_side: str = field(
+        default='right',
+        metadata={'help': 'The side to pad on.'}
+    )
+    use_fast: bool = field(
+        default=True,
+        metadata={'help': 'Use fast tokenizers.'}
+    )
 
     def to_dict(self):
-        output_dict = {}
-        for key, value in self.__dict__.items():
-            output_dict[key] = value
-
-        return output_dict
+        return self.__dict__
+    
+    def get_warmup_steps(self, num_training_steps: int) -> int:
+        warmup_steps = (
+            self.warmup_steps if self.warmup_steps > 0 else math.ceil(num_training_steps * self.warmup_ratio)
+        )
+        return warmup_steps
     
     def __post_init__(self):
         if self.peft_config is not None and not isinstance(self.peft_config, PeftConfig):
             raise ValueError(f'`peft_config` must be an instance of `PeftConfig` class. Got {type(self.peft_config)} instead.')
-        
-    def get_optimiser(self):
-        return Trainer.get_optimizer_cls_and_kwargs(self)

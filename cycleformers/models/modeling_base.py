@@ -1,11 +1,6 @@
-from huggingface_hub import hf_hub_download
-from peft import (
-    PeftConfig,
-    PeftModel,
-    PeftModelForCausalLM,
-    PeftModelForSeq2SeqLM,
-)
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from pytorch_lightning import LightningModule
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, Trainer
+from transformers.optimization import get_scheduler
 
 from ..cycles import CausalCycle, Seq2SeqCycle
 from ..core import TrainCycle
@@ -19,9 +14,98 @@ class CycleSequence:
         for module in self.modules:
             input = module(input)
         return input
+    
 
+class CycleModel(LightningModule):
+    def __init__(
+        self,
+        model_A_config: ModelConfig,
+        model_B_config: ModelConfig,
+    ):
+        super().__init__()
+        self.automatic_optimization = False
 
-class CycleModel:
+        if not isinstance(model_A_config, ModelConfig):
+            raise ValueError(f"model_config_A must be a ModelConfig, got {type(model_A_config)}")
+        if not isinstance(model_B_config, ModelConfig):
+            raise ValueError(f"model_config_B must be a ModelConfig, got {type(model_B_config)}")
+        
+        self.model_A_config = model_A_config
+        self.model_B_config = model_B_config
+
+        self.model_A, self.tokenizer_A = self.load_model(model_A_config)
+        self.model_B, self.tokenizer_B = self.load_model(model_B_config)
+        
+    def load_model(self, config):
+        model_config = AutoConfig.from_pretrained(config.pretrained_model_name_or_path)
+        if getattr(model_config, 'is_encoder_decoder', False):
+            model = AutoModelForSeq2SeqLM.from_pretrained(config.pretrained_model_name_or_path, config=model_config, **config)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(config.pretrained_model_name_or_path, config=model_config, **config)
+
+        tokenizer = AutoTokenizer.from_pretrained(config.pretrained_model_name_or_path, **config)
+        return model, tokenizer
+
+    def configure_optimizers(self):
+        optimisers = []
+        schedulers = []
+
+        for config, model in zip([self.model_A_config, self.model_B_config], [self.model_A, self.model_B]):
+            optim, optim_kwargs = Trainer.get_optimizer_cls_and_kwargs(config)
+            optimisers = optim(model.parameters(), **optim_kwargs)
+
+            schedulers.append(get_scheduler(
+                config.lr_scheduler_type,
+                optimizer=optimisers,
+                num_warmup_steps=config.get_warmup_steps(-1),
+                num_training_steps=-1,
+                scheduler_specific_kwargs=config.lr_scheduler_kwargs,
+            ))
+        
+        # TODO updated schedulers later in case 
+        return optimisers, schedulers
+        
+    def training_step(self, batch, batch_idx):
+        opt_A, opt_B = self.optimizers()
+        sch_A, sch_B = self.lr_schedulers()
+        
+        batch, _, _ = batch
+
+        if batch[TrainCycle.A]:
+            loss_A = self.cycle_A(batch[TrainCycle.A]).loss
+            self.manual_backward(loss_A)
+
+            opt_A.step()
+            sch_A.step()
+            opt_A.zero_grad()
+
+        if batch[TrainCycle.B]:
+            loss_B = self.cycle_B(batch[TrainCycle.B]).loss
+            self.manual_backward(loss_B)
+
+            opt_B.step()
+            sch_B.step()
+            opt_B.zero_grad()
+
+    def validation_step(self, batch, batch_idx):
+        batch, _, _ = batch
+
+        if batch[TrainCycle.A]:
+            loss_A = self.model_A(
+                input_ids=batch[TrainCycle.A]['input_ids'].to(self.model_A.device),
+                attention_mask=batch[TrainCycle.A]['attention_mask'].to(self.model_A.device),
+                labels=batch[TrainCycle.A]['labels'].to(self.model_A.device),
+            ).loss
+        if batch[TrainCycle.B]:
+            loss_B = self.model_B(
+                input_ids=batch[TrainCycle.B]['input_ids'].to(self.model_B.device),
+                attention_mask=batch[TrainCycle.B]['attention_mask'].to(self.model_B.device),
+                labels=batch[TrainCycle.B]['labels'].to(self.model_B.device),
+            ).loss
+
+    
+
+class CycleModelOld:
     def __init__(
         self,
         pretrained_model_a_name_or_path: str,
