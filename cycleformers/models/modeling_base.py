@@ -15,6 +15,17 @@ class CycleSequence:
             input = module(input)
         return input
     
+    def __iter__(self):
+        return iter(self.modules)
+    
+    def __add__(self, other):
+        if isinstance(other, CycleSequence) or isinstance(other, list):
+            for module in other:
+                self.modules.append(module)
+
+        elif callable(other):
+            self.modules.append(other)
+    
 
 class CycleModel(LightningModule):
     def __init__(
@@ -35,6 +46,14 @@ class CycleModel(LightningModule):
 
         self.model_A, self.tokenizer_A = self.load_model(model_A_config)
         self.model_B, self.tokenizer_B = self.load_model(model_B_config)
+
+        self.skip_reencode = False
+        if self.tokenizer_A.get_vocab() == self.tokenizer_B.get_vocab() and type(self.tokenizer_A) == type(self.tokenizer_A):
+            self.skip_reencode = True
+            print('Same model and tokenizer detected. Using fast cycle. This can be manually disabled in the lightning config.')
+
+        self.cycle_A = self.init_cycle(self.model_A, self.tokenizer_A, model_A_config, self.model_B, self.tokenizer_B)
+        self.cycle_B = self.init_cycle(self.model_B, self.tokenizer_B, model_B_config, self.model_A, self.tokenizer_A)
         
     def load_model(self, config):
         model_config = AutoConfig.from_pretrained(config.pretrained_model_name_or_path)
@@ -45,6 +64,19 @@ class CycleModel(LightningModule):
 
         tokenizer = AutoTokenizer.from_pretrained(config.pretrained_model_name_or_path, **config)
         return model, tokenizer
+    
+    def init_cycle(self, gen_model, gen_tokenizer, gen_config, train_model, train_tokenizer):
+        gen_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
+        train_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
+
+        cycle_stages = CycleSequence(gen_cycle.generate(gen_model, gen_tokenizer, gen_config.generation_config))
+
+        if not self.skip_reencode:
+            cycle_stages.append([gen_cycle.decode(gen_tokenizer), train_cycle.encode(train_tokenizer)])
+
+        cycle_stages.append([train_cycle.format(train_model, train_tokenizer), train_cycle.train(train_model)])
+
+        return cycle_stages
 
     def configure_optimizers(self):
         optimisers = []
