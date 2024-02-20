@@ -65,9 +65,9 @@ class CycleModel(LightningModule):
         tokenizer = AutoTokenizer.from_pretrained(config.pretrained_model_name_or_path, **config)
         return model, tokenizer
     
-    def init_cycle(self, gen_model, gen_tokenizer, gen_config, train_model, train_tokenizer):
-        gen_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
-        train_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
+    def init_cycle(self, gen_model, gen_tokenizer, gen_config, train_model, train_tokenizer, train_config):
+        gen_cycle = Seq2SeqCycle if getattr(gen_config, 'is_encoder_decoder', False) else CausalCycle
+        train_cycle = Seq2SeqCycle if getattr(train_config, 'is_encoder_decoder', False) else CausalCycle
 
         cycle_stages = CycleSequence(gen_cycle.generate(gen_model, gen_tokenizer, gen_config.generation_config))
 
