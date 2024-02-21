@@ -1,12 +1,13 @@
 from collections import OrderedDict
+
 from pytorch_lightning import LightningModule
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, Trainer
 from transformers.optimization import get_scheduler
 
-from ..cycles import CausalCycle, Seq2SeqCycle
-from ..cycles.cycle_utils import CycleSequence
-from ..core import TrainCycle
-from ..trainer import ModelConfig
+from cycleformers.cycles import CausalCycle, Seq2SeqCycle
+from cycleformers.cycles.cycle_utils import CycleSequence
+from cycleformers.core import TrainCycle
+from cycleformers.trainer import ModelConfig
     
 
 class CycleModel(LightningModule):

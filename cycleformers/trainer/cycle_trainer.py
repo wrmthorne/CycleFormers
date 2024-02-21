@@ -1,21 +1,15 @@
+from typing import Optional
+
 from datasets import Dataset
 from lightning.pytorch.utilities import CombinedLoader
 from pytorch_lightning import Trainer
 from torch.utils.data import DataLoader
 from transformers import DataCollator
-from typing import Optional
 
 from .trainer_config import TrainerConfig
-from .trainer_utils import prepare_data_collator, validate_train_dataset, validate_data_collator
+from .trainer_utils import prepare_data_collator, validate_data_collator, validate_train_dataset
 
-from ..core import TrainCycle
-
-# TODO find more permanent solution to this
-def task_type(model):
-    if getattr(model.config, 'is_encoder_decoder', False):
-        return 'SEQ2SEQ_LM'
-    else:
-        return 'CAUSAL_LM'
+from cycleformers.core import TrainCycle
     
 
 class CycleTrainer(Trainer):

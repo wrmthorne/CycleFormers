@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Dict, List, Iterable, Optional, Union
+from typing import Dict, Iterable, List, Optional, Union
 
 from pytorch_lightning.accelerators import Accelerator
 from pytorch_lightning.callbacks import Callback

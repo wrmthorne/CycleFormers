@@ -101,11 +101,9 @@ def main():
 
 
     b_dataset = b_dataset.map(lambda example: {
-        **model.tokenizer_B(example['text'], padding=True),
+        **model.tokenizer_B(example['text'] + '\n' + example['label']),
     })
-    b_dataset['validation'] = b_dataset['validation'].map(lambda example: {
-        'labels': model.tokenizer_B(example['text'] + '\n' + example['label'])['input_ids'],
-    }, remove_columns=['label'])
+    b_dataset['validation']['labels'] = b_dataset['validation']['input_ids']
     b_dataset = b_dataset.remove_columns('text')
 
     trainer_config = TrainerConfig(

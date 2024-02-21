@@ -1,7 +1,7 @@
 from collections import OrderedDict
 from itertools import islice
 import operator
-from typing import Callable, Dict, Iterator, List, overload, Union
+from typing import Callable, Dict, Iterator, overload, Union
 
 # Adaptation of torch.nn.Sequential https://github.com/pytorch/pytorch/blob/main/torch/nn/modules/container.py#L43
 class CycleSequence:
@@ -106,14 +106,30 @@ class CycleSequence:
         self._methods[str(index)] = method
         return self
     
-    def append(self, other: Union[Callable, OrderedDict]):
+    @overload
+    def append(self, other: Callable) -> None:
+        ...
+
+    @overload
+    def append(self, other: OrderedDict[str, Callable]) -> None:
+        ...
+    
+    def append(self, other):
         if isinstance(other, OrderedDict):
             for name, method in method.items():
                 self.add_method(name, method)
         else:
             self.add_method(str(len(self._methods)), other)
     
-    def extend(self, *args: Union[Callable, OrderedDict]):
+    @overload
+    def extend(self, *args: Callable) -> None:
+        ...
+
+    @overload
+    def extend(self, args: OrderedDict[str, Callable]) -> None:
+        ...
+
+    def extend(self, *args):
         if len(args) == 1 and isinstance(args[0], OrderedDict):
             for key, method in args[0].items():
                 self.add_method(key, method)

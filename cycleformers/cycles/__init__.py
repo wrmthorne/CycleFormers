@@ -1,2 +1,2 @@
-from .causal_cycle import CausalCycle
-from .seq2seq_cycle import Seq2SeqCycle
+
+from .cycles import CausalCycle, Seq2SeqCycle

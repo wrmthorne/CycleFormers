@@ -1,7 +1,8 @@
 import importlib
 import os
-from transformers import GenerationConfig
 import yaml
+
+from transformers import GenerationConfig
 
 from .trainer import ModelConfig, TrainerConfig
 
