@@ -1,30 +1,12 @@
+from collections import OrderedDict
 from pytorch_lightning import LightningModule
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, Trainer
 from transformers.optimization import get_scheduler
 
 from ..cycles import CausalCycle, Seq2SeqCycle
+from ..cycles.cycle_utils import CycleSequence
 from ..core import TrainCycle
 from ..trainer import ModelConfig
-
-class CycleSequence:
-    def __init__(self, *args):
-        self.modules = args
-
-    def __call__(self, input):
-        for module in self.modules:
-            input = module(input)
-        return input
-    
-    def __iter__(self):
-        return iter(self.modules)
-    
-    def __add__(self, other):
-        if isinstance(other, CycleSequence) or isinstance(other, list):
-            for module in other:
-                self.modules.append(module)
-
-        elif callable(other):
-            self.modules.append(other)
     
 
 class CycleModel(LightningModule):
@@ -52,29 +34,40 @@ class CycleModel(LightningModule):
             self.skip_reencode = True
             print('Same model and tokenizer detected. Using fast cycle. This can be manually disabled in the lightning config.')
 
-        self.cycle_A = self.init_cycle(self.model_A, self.tokenizer_A, model_A_config, self.model_B, self.tokenizer_B)
-        self.cycle_B = self.init_cycle(self.model_B, self.tokenizer_B, model_B_config, self.model_A, self.tokenizer_A)
+        self.cycle_A = self.init_cycle(self.model_A, self.tokenizer_A, model_A_config, self.model_B, self.tokenizer_B, model_B_config)
+        self.cycle_B = self.init_cycle(self.model_B, self.tokenizer_B, model_B_config, self.model_A, self.tokenizer_A, model_A_config)
+
+        print(f'Cycle A: {self.cycle_A}')
+        print(f'Cycle B: {self.cycle_B}')
         
     def load_model(self, config):
         model_config = AutoConfig.from_pretrained(config.pretrained_model_name_or_path)
         if getattr(model_config, 'is_encoder_decoder', False):
-            model = AutoModelForSeq2SeqLM.from_pretrained(config.pretrained_model_name_or_path, config=model_config, **config)
+            model = AutoModelForSeq2SeqLM.from_pretrained(config=model_config, **config.pretrained_model_kwargs())
         else:
-            model = AutoModelForCausalLM.from_pretrained(config.pretrained_model_name_or_path, config=model_config, **config)
+            model = AutoModelForCausalLM.from_pretrained(config=model_config, **config.pretrained_model_kwargs())
 
-        tokenizer = AutoTokenizer.from_pretrained(config.pretrained_model_name_or_path, **config)
+        tokenizer = AutoTokenizer.from_pretrained(**config.pretrained_tokenizer_kwargs())
         return model, tokenizer
     
     def init_cycle(self, gen_model, gen_tokenizer, gen_config, train_model, train_tokenizer, train_config):
         gen_cycle = Seq2SeqCycle if getattr(gen_config, 'is_encoder_decoder', False) else CausalCycle
         train_cycle = Seq2SeqCycle if getattr(train_config, 'is_encoder_decoder', False) else CausalCycle
 
-        cycle_stages = CycleSequence(gen_cycle.generate(gen_model, gen_tokenizer, gen_config.generation_config))
+        cycle_stages = CycleSequence(OrderedDict({
+            'Generate Synthetic IDs': gen_cycle.generate(gen_model, gen_tokenizer, gen_config.generation_config),
+        }))
 
         if not self.skip_reencode:
-            cycle_stages.append([gen_cycle.decode(gen_tokenizer), train_cycle.encode(train_tokenizer)])
+            cycle_stages.extend(OrderedDict({
+                'Decode Synthetic IDs to Text': gen_cycle.decode(gen_tokenizer),
+                'Encode Synthetic Text to Train IDs': train_cycle.encode(train_tokenizer)
+            }))
 
-        cycle_stages.append([train_cycle.format(train_model, train_tokenizer), train_cycle.train(train_model)])
+        cycle_stages.extend(OrderedDict({
+            'Format Synthetic Train IDs': train_cycle.format(train_model, train_tokenizer),
+            'Calculate Train Model Reconstruction Loss': train_cycle.train(train_model)
+        }))
 
         return cycle_stages
 
@@ -84,11 +77,12 @@ class CycleModel(LightningModule):
 
         for config, model in zip([self.model_A_config, self.model_B_config], [self.model_A, self.model_B]):
             optim, optim_kwargs = Trainer.get_optimizer_cls_and_kwargs(config)
-            optimisers = optim(model.parameters(), **optim_kwargs)
+            optimiser = optim(model.parameters(), **optim_kwargs)
+            optimisers.append(optimiser)
 
             schedulers.append(get_scheduler(
                 config.lr_scheduler_type,
-                optimizer=optimisers,
+                optimizer=optimiser,
                 num_warmup_steps=config.get_warmup_steps(-1),
                 num_training_steps=-1,
                 scheduler_specific_kwargs=config.lr_scheduler_kwargs,
@@ -101,7 +95,7 @@ class CycleModel(LightningModule):
         opt_A, opt_B = self.optimizers()
         sch_A, sch_B = self.lr_schedulers()
         
-        batch, _, _ = batch
+        batch, _, _ = batch        
 
         if batch[TrainCycle.A]:
             loss_A = self.cycle_A(batch[TrainCycle.A]).loss
@@ -134,54 +128,3 @@ class CycleModel(LightningModule):
                 attention_mask=batch[TrainCycle.B]['attention_mask'].to(self.model_B.device),
                 labels=batch[TrainCycle.B]['labels'].to(self.model_B.device),
             ).loss
-
-    
-
-class CycleModelOld:
-    def __init__(
-        self,
-        pretrained_model_a_name_or_path: str,
-        pretrained_model_b_name_or_path: str,
-        model_a_args = {},
-        model_b_args = {},
-    ):
-        if isinstance(model_a_args, ModelConfig):
-            model_a_args = model_a_args.to_dict()
-        elif not isinstance(model_a_args, dict):
-            raise ValueError(f"model_a_args must be a dict or ModelConfig, got {type(model_a_args)}")
-        if isinstance(model_b_args, ModelConfig):
-            model_b_args = model_b_args.to_dict()
-        elif not isinstance(model_b_args, dict):
-            raise ValueError(f"model_b_args must be a dict or ModelConfig, got {type(model_b_args)}")
-        
-        self.model_a, self.tokenizer_a = self._load_model(pretrained_model_a_name_or_path, model_a_args)
-        self.model_b, self.tokenizer_b = self._load_model(pretrained_model_b_name_or_path, model_b_args)
-
-        self.cycle_a = self.init_cycle(self.model_a, self.tokenizer_a, self.model_b, self.tokenizer_b)
-        self.cycle_b = self.init_cycle(self.model_b, self.tokenizer_b, self.model_a, self.tokenizer_a)
-
-        
-
-    def _load_model(self, pretrained_model_name_or_path, model_args):
-        config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
-        if config.is_encoder_decoder:
-            model = AutoModelForSeq2SeqLM.from_pretrained(pretrained_model_name_or_path, config=config, **model_args)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path, config=config, **model_args)
-        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path, **model_args)
-        if not tokenizer.pad_token_id:
-            tokenizer.pad_token_id = tokenizer.eos_token_id
-        return model, tokenizer
-    
-    def init_cycle(self, train_model, train_tokenizer, gen_model, gen_tokenizer):
-        gen_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
-        train_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
-
-        # TODO Add in sequences for shortcuts e.g. when model is the same for both cycles or tokenizer matches to save decode encode overhead
-        return CycleSequence(
-            gen_cycle.generate(train_model, train_tokenizer, {}),
-            gen_cycle.decode(gen_tokenizer),
-            train_cycle.encode(train_tokenizer),
-            train_cycle.format(train_model, train_tokenizer),
-            train_cycle.train(train_model),
-        )

@@ -1,14 +1,51 @@
 from dataclasses import dataclass, field
 import math
 from peft import PeftConfig
+from transformers import GenerationConfig
 from typing import Optional
+from yaml import safe_load, safe_dump
+
+PRETRAINED_MODEL_KWARGS = [
+    'pretrained_model_name_or_path',
+    'torch_dtype',
+    'trust_remote_code',
+    'use_flash_attention_2',
+]
+
+PRETRAINED_TOKENIZER_KWARGS = [
+    'pretrained_model_name_or_path',
+    'use_fast',
+    'padding_side',
+    'padding',
+    'truncation',
+]
+
+TRAINING_KWARGS = [
+    'per_device_train_batch_size',
+    'per_device_eval_batch_size',
+    'learning_rate',
+    'weight_decay',
+    'adam_beta1',
+    'adam_beta2',
+    'adam_epsilon',
+    'lr_scheduler_type',
+    'lr_scheduler_kwargs',
+    'warmup_ratio',
+    'warmup_steps',
+    'optim',
+    'optim_args',
+    'resume_from_checkpoint',
+    'hub_token',
+]
+
 
 @dataclass
 class ModelConfig:
     '''
     Configuration class for each model in the cycle
     '''
-    model_name_or_path: Optional[str] = field(
+    # Model specific
+    pretrained_model_name_or_path: Optional[str] = field(
         default=None,
         metadata={'help': 'The model checkpoint for weights initialization. Leave None if you want to train a model from scratch.'}
     )
@@ -26,14 +63,24 @@ class ModelConfig:
         default=False,
         metadata={'help': 'Trust remote code when loading a model.'}
     )
-    peft_config: Optional[PeftConfig] = field(
-        default=None,
-        metadata={'help': 'PEFT configuration for the model. Leave None to not use PEFT.'}
-    )
     use_flash_attention_2: bool = field(
         default=False,
         metadata={'help': 'Use Flash attention for the model. This is a separate package that must be installed from `flash-attn`.'}
     )
+
+    # PEFT specific
+    peft_config: Optional[PeftConfig] = field(
+        default=None,
+        metadata={'help': 'PEFT configuration for the model. Leave None to not use PEFT.'}
+    )
+
+    # Generation specific
+    generation_config: Optional[GenerationConfig] = field(
+        default=GenerationConfig(),
+        metadata={'help': 'The generation configuration for the model.'}
+    )
+
+    # Training specific
     per_device_train_batch_size: int = field(
         default=4,
         metadata={'help': 'The batch size per GPU for training.'}
@@ -94,6 +141,8 @@ class ModelConfig:
         default=None,
         metadata={'help': 'The Hugging Face model hub token.'}
     )
+
+    # Tokenizer specific
     padding_side: str = field(
         default='right',
         metadata={'help': 'The side to pad on.'}
@@ -102,16 +151,79 @@ class ModelConfig:
         default=True,
         metadata={'help': 'Use fast tokenizers.'}
     )
+    padding: str = field(
+        default=False,
+        metadata={'help': 'The padding strategy.'}
+    )
+    truncation: str = field(
+        default=False,
+        metadata={'help': 'The truncation strategy.'}
+    )
 
-    def to_dict(self):
-        return self.__dict__
+    def __post_init__(self):
+        if self.peft_config is not None and not isinstance(self.peft_config, PeftConfig):
+            raise ValueError(f'`peft_config` must be an instance of `PeftConfig` class. Got {type(self.peft_config)} instead.')
     
+    def pretrained_model_kwargs(self):
+        return {k: v for k, v in self.to_dict().items() if k in PRETRAINED_MODEL_KWARGS}
+    
+    def pretrained_tokenizer_kwargs(self):
+        return {k: v for k, v in self.to_dict().items() if k in PRETRAINED_TOKENIZER_KWARGS}
+    
+    def training_kwargs(self):
+        return {k: v for k, v in self.to_dict().items() if k in TRAINING_KWARGS}
+    
+    # https://github.com/huggingface/transformers/blob/main/src/transformers/training_args.py
     def get_warmup_steps(self, num_training_steps: int) -> int:
         warmup_steps = (
             self.warmup_steps if self.warmup_steps > 0 else math.ceil(num_training_steps * self.warmup_ratio)
         )
         return warmup_steps
+        
+
+    def to_dict(self):
+        return self.__dict__
     
-    def __post_init__(self):
-        if self.peft_config is not None and not isinstance(self.peft_config, PeftConfig):
-            raise ValueError(f'`peft_config` must be an instance of `PeftConfig` class. Got {type(self.peft_config)} instead.')
+    def to_yaml(self, file_path: str, args_key: str = None) -> None:
+        '''
+        Save the model configuration to a YAML file. The model configuration can
+        be saved under s specific key in the YAML file. To specify the key, use
+        the `args_key` parameter. If no key is specified, the model configuration
+        will be saved at the root of the YAML file.
+
+        Args:
+            file_path (str): The path to the YAML file.
+            args_key (str): The key to use to save the model configuration to the
+                YAML file.
+        '''
+        with open(file_path, 'w') as file:
+            safe_dump({args_key: self.to_dict()}, file, default_flow_style=False)
+    
+    @classmethod
+    def from_dict(cls, dictionary: dict) -> 'ModelConfig':
+        return cls(**dictionary)
+    
+    @classmethod
+    def from_yaml(cls, file_path: str, args_key: str = 'model') -> 'ModelConfig':
+        '''
+        Load a model configuration from a YAML file. Accepts configuration of a
+        model from YAML file. The model configuration can be in its own YAML or
+        as part of a larger configuration file. To specify the model
+        configuration in a larger configuration file, use the `args_key`
+        parameter to specify the key.
+
+        Args:
+            file_path (str): The path to the YAML file.
+            args_key (str): The key to use to load the model configuration from
+                the YAML file.
+
+        Returns:
+            ModelConfig: The model configuration.
+        '''
+        with open(file_path, 'r') as file:
+            config = safe_load(file)
+
+        if args_key in config:
+            return cls(**config['model'])
+        else:
+            return cls(**config)

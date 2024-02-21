@@ -31,15 +31,8 @@ class TrainDataset(object):
             return self.tokenize(example['label'])['input_ids']
         else:
             raise ValueError(f'Unknown task {self.task}. Must be one of "causal_lm" or "seq2seq_lm"')
-
-    def load_data(self, data_path: str) -> Tuple[Dataset]:
-        if data_path.endswith('.json') or data_path.endswith('.jsonl'):
-            data = load_dataset('json', data_files=data_path)
-        elif os.path.isdir(data_path):
-            data = load_from_disk(data_path)
-        else:
-            load_dataset(data_path)
-
+        
+    def _prepare_dataset(self, data: Dataset) -> Dataset:
         data['train'] = data['train'].map(lambda x: self.tokenize(x['text']), remove_columns=['text'])
         data['train'] = data['train'].filter(lambda x: len(x['input_ids']) > 0)
 
@@ -53,6 +46,20 @@ class TrainDataset(object):
             data['validation'] = None
 
         return data['train'], data['validation']
+
+    def load_data(self, data_path: str) -> Tuple[Dataset]:
+        if data_path.endswith('.json') or data_path.endswith('.jsonl'):
+            data = load_dataset('json', data_files=data_path)
+        elif os.path.isdir(data_path):
+            data = load_from_disk(data_path)
+        else:
+            load_dataset(data_path)
+
+        return self._prepare_dataset(data)
+    
+    def from_dataset(self, dataset: Dataset) -> Tuple[Dataset]:
+        return self._prepare_dataset(dataset)
+
     
 
 class InferenceDataset(object):

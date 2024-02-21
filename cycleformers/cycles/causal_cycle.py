@@ -11,6 +11,9 @@ class CausalCycle:
             raise ValueError(f"generation_config must be a dict or GenerationConfig, got {type(generation_config)}")
         
         def causal_generate(batch):
+            default_padding_side = tokenizer.padding_side
+            tokenizer.padding_side = 'left'
+
             input_ids, attention_mask = batch['input_ids'], batch['attention_mask']
             output_ids = model.generate(
                 input_ids         = input_ids.to(model.device),
@@ -19,6 +22,7 @@ class CausalCycle:
                 generation_config = generation_config,
             )
 
+            tokenizer.padding_side = default_padding_side
             response_ids = output_ids[:, input_ids.shape[-1]:]
             
             return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': response_ids}
@@ -46,6 +50,7 @@ class CausalCycle:
     @staticmethod
     def format(model, tokenizer):
         def causal_format(batch):
+            batch = {k: v.to(model.device) for k, v in batch.items()}
             input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
 
             labels = torch.cat((input_ids, labels), dim=-1)
