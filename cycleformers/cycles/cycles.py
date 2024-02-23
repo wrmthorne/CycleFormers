@@ -32,6 +32,8 @@ class CausalCycle:
             raise ValueError(f"generation_config must be a dict or GenerationConfig, got {type(generation_config)}")
         
         def causal_generate(batch):
+            model.eval()
+
             default_padding_side = tokenizer.padding_side
             tokenizer.padding_side = 'left'
 
@@ -89,6 +91,8 @@ class CausalCycle:
     @staticmethod
     def train(model):
         def causal_train(batch):
+            model.train()
+
             outputs = model(
                 input_ids      = batch['input_ids'].to(model.device),
                 attention_mask = batch['attention_mask'].to(model.device),
@@ -110,6 +114,8 @@ class Seq2SeqCycle:
             raise ValueError(f"generation_config must be a dict or GenerationConfig, got {type(generation_config)}")
         
         def seq2seq_generate(batch):
+            model.eval()
+
             input_ids, attention_mask = batch['input_ids'], batch['attention_mask']
             output_ids = model.generate(
                 input_ids         = input_ids.to(model.device),
@@ -151,6 +157,8 @@ class Seq2SeqCycle:
     @staticmethod
     def train(model):
         def seq2seq_train(batch):
+            model.train()
+            
             outputs = model(
                 input_ids      = batch['input_ids'].to(model.device),
                 attention_mask = batch['attention_mask'].to(model.device),

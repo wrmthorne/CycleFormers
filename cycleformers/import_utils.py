@@ -14,9 +14,10 @@ YAML_HEADERS_TO_CONFIG_CLASS_MAPPING = {
     'trainer': TrainerConfig,
 }
 
-def is_module_installed(module_name: str) -> bool:
+def is_peft_available() -> bool:
     '''Method to check if a module is installed in the current environment.'''
-    return importlib.util.find_spec(module_name) is not None
+    return importlib.util.find_spec('peft') is not None
+    
 
 
 def load_config_from_yaml(file_path: str) -> dict:

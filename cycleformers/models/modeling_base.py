@@ -8,40 +8,47 @@ from cycleformers.cycles import CausalCycle, Seq2SeqCycle
 from cycleformers.cycles.cycle_utils import CycleSequence
 from cycleformers.core import TrainCycle
 from cycleformers.trainer import ModelConfig
+from cycleformers.import_utils import is_peft_available
+
+if is_peft_available():
+    from peft import (
+        PeftConfig,
+        PeftModel,
+    )
     
 
 class CycleModel(LightningModule):
     def __init__(
         self,
         model_A_config: ModelConfig,
-        model_B_config: ModelConfig,
+        model_B_config: ModelConfig = None,
     ):
         super().__init__()
         self.automatic_optimization = False
 
         if not isinstance(model_A_config, ModelConfig):
             raise ValueError(f"model_config_A must be a ModelConfig, got {type(model_A_config)}")
-        if not isinstance(model_B_config, ModelConfig):
+        if model_B_config is not None and not isinstance(model_B_config, ModelConfig):
             raise ValueError(f"model_config_B must be a ModelConfig, got {type(model_B_config)}")
         
         self.model_A_config = model_A_config
-        self.model_B_config = model_B_config
+        self.model_B_config = model_B_config if model_B_config is not None else model_A_config
 
-        self.model_A, self.tokenizer_A = self.load_model(model_A_config)
-        self.model_B, self.tokenizer_B = self.load_model(model_B_config)
+        self.model_A, self.tokenizer_A = self._load_model(model_A_config)
+        self.model_B, self.tokenizer_B = self._load_model(model_B_config)
 
         self.skip_reencode = False
         if self.tokenizer_A.get_vocab() == self.tokenizer_B.get_vocab() and type(self.tokenizer_A) == type(self.tokenizer_A):
             self.skip_reencode = True
             print('Same model and tokenizer detected. Using fast cycle. This can be manually disabled in the lightning config.')
 
-        self.cycle_A = self.init_cycle(self.model_A, self.tokenizer_A, model_A_config, self.model_B, self.tokenizer_B, model_B_config)
-        self.cycle_B = self.init_cycle(self.model_B, self.tokenizer_B, model_B_config, self.model_A, self.tokenizer_A, model_A_config)
+        self.cycle_A = self._init_cycle(self.model_A, self.tokenizer_A, model_A_config, self.model_B, self.tokenizer_B, model_B_config)
+        self.cycle_B = self._init_cycle(self.model_B, self.tokenizer_B, model_B_config, self.model_A, self.tokenizer_A, model_A_config)
 
         print(f'Cycle A: {self.cycle_A}')
         print(f'Cycle B: {self.cycle_B}')
         
-    def load_model(self, config):
+    def _load_model(self, config):
         model_config = AutoConfig.from_pretrained(config.pretrained_model_name_or_path)
         if getattr(model_config, 'is_encoder_decoder', False):
             model = AutoModelForSeq2SeqLM.from_pretrained(config=model_config, **config.pretrained_model_kwargs())
@@ -51,7 +58,7 @@ class CycleModel(LightningModule):
         tokenizer = AutoTokenizer.from_pretrained(**config.pretrained_tokenizer_kwargs())
         return model, tokenizer
     
-    def init_cycle(self, gen_model, gen_tokenizer, gen_config, train_model, train_tokenizer, train_config):
+    def _init_cycle(self, gen_model, gen_tokenizer, gen_config, train_model, train_tokenizer, train_config):
         gen_cycle = Seq2SeqCycle if getattr(gen_config, 'is_encoder_decoder', False) else CausalCycle
         train_cycle = Seq2SeqCycle if getattr(train_config, 'is_encoder_decoder', False) else CausalCycle
 

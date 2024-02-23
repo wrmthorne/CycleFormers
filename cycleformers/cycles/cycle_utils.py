@@ -1,12 +1,12 @@
 from collections import OrderedDict
 from itertools import islice
 import operator
-from typing import Callable, Dict, Iterator, overload, Union
+from typing import Callable, Dict, Iterator, Optional, overload, Union
 
 # Adaptation of torch.nn.Sequential https://github.com/pytorch/pytorch/blob/main/torch/nn/modules/container.py#L43
 class CycleSequence:
 
-    _methods: Dict[str, Callable] = OrderedDict()
+    _methods: Dict[str, Callable]
 
     @overload
     def __init__(self, *args: Callable) -> None:
@@ -17,6 +17,8 @@ class CycleSequence:
         ...
 
     def __init__(self, *args):
+        super().__setattr__('_methods', OrderedDict())
+
         if len(args) == 1 and isinstance(args[0], OrderedDict):
             for key, method in args[0].items():
                 self.add_method(key, method)
@@ -34,12 +36,14 @@ class CycleSequence:
     
     def __add__(self, other) -> 'CycleSequence':
         if isinstance(other, CycleSequence):
+            new_sequence = CycleSequence(self._methods)
+
             for name, method in other._methods.items():
-                self.add_method(name, method)
+                new_sequence.add_method(name, method)
+
+            return new_sequence
         else:
             raise ValueError(f'Unsupported type {type(other)}')
-        
-        return self
     
     def __iadd__(self, other) -> 'CycleSequence':
         return self.__add__(other)
@@ -60,24 +64,19 @@ class CycleSequence:
             return self._get_item_by_idx(self._methods.values(), idx)
         
     def __setitem__(self, idx: int, method: Callable) -> None:
-        key: str = self._get_item_by_idx(self._methods.keys(), idx)
-        return setattr(self, key, method)
+        key = self._get_item_by_idx(self._methods.keys(), idx)
+        self._methods[key] = method
     
     def __delitem__(self, idx: Union[slice, int]) -> None:
         if isinstance(idx, slice):
             for key in list(self._methods.keys())[idx]:
-                delattr(self, key)
+                del self._methods[key]
         else:
             key = self._get_item_by_idx(self._methods.keys(), idx)
-            delattr(self, key)
+            del self._methods[key]
         # To preserve numbering
         str_indices = [str(i) for i in range(len(self._methods))]
         self._methods = OrderedDict(list(zip(str_indices, self._methods.values())))
-
-    def __dir__(self):
-        keys = super().__dir__()
-        keys = [key for key in keys if not key.isdigit()]
-        return keys
     
     def __iter__(self) -> Iterator[Callable]:
         return iter(self._methods.values())
@@ -89,22 +88,10 @@ class CycleSequence:
         return text
     
     def add_method(self, name: str, method: Callable) -> None:
-        self._methods[name] = method
+        if name in self._methods:
+            name = str(len(self._methods))
 
-    def insert(self, index: int, method: Callable) -> 'CycleSequence':
-        if not isinstance(method, Callable):
-            raise AssertionError(
-                f'method should be of type: {Callable}')
-        n = len(self._methods)
-        if not (-n <= index <= n):
-            raise IndexError(
-                f'Index out of range: {index}')
-        if index < 0:
-            index += n
-        for i in range(n, index, -1):
-            self._methods[str(i)] = self._methods[str(i - 1)]
-        self._methods[str(index)] = method
-        return self
+        self._methods[name] = method
     
     @overload
     def append(self, other: Callable) -> None:
@@ -115,11 +102,7 @@ class CycleSequence:
         ...
     
     def append(self, other):
-        if isinstance(other, OrderedDict):
-            for name, method in method.items():
-                self.add_method(name, method)
-        else:
-            self.add_method(str(len(self._methods)), other)
+        self.add_method(str(len(self._methods)), other)
     
     @overload
     def extend(self, *args: Callable) -> None:
@@ -129,13 +112,12 @@ class CycleSequence:
     def extend(self, args: OrderedDict[str, Callable]) -> None:
         ...
 
-    def extend(self, *args):
-        if len(args) == 1 and isinstance(args[0], OrderedDict):
-            for key, method in args[0].items():
-                self.add_method(key, method)
+    def extend(self, sequence):
+        if isinstance(sequence, CycleSequence):
+            for method in sequence._methods.values():
+                self.append(method)
+        elif isinstance(sequence, OrderedDict):
+            for name, method in sequence.items():
+                self.add_method(name, method)
         else:
-            start_idx = len(self._methods)
-            for idx, method in enumerate(args):
-                self.add_method(str(start_idx + idx), method)
-    
-    
+            self.append(method)
