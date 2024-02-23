@@ -31,50 +31,51 @@ class CausalCycle:
         elif not isinstance(generation_config, GenerationConfig):
             raise ValueError(f"generation_config must be a dict or GenerationConfig, got {type(generation_config)}")
         
-        def causal_generate(batch):
+        def causal_generate(**inputs):
             model.eval()
 
             default_padding_side = tokenizer.padding_side
             tokenizer.padding_side = 'left'
 
-            input_ids, attention_mask = batch['input_ids'], batch['attention_mask']
-            output_ids = model.generate(
-                input_ids         = input_ids.to(model.device),
-                attention_mask    = attention_mask.to(model.device),
-                pad_token_id      = tokenizer.pad_token_id,
-                generation_config = generation_config,
-            )
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+
+            with torch.no_grad():
+                output_ids = model.generate(
+                    **inputs,
+                    pad_token_id=tokenizer.pad_token_id,
+                    generation_config=generation_config,
+                )
 
             tokenizer.padding_side = default_padding_side
-            response_ids = output_ids[:, input_ids.shape[-1]:]
+            response_ids = output_ids[:, inputs['input_ids'].shape[-1]:]
             
-            return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': response_ids}
+            return inputs | {'labels': response_ids}
         
         return causal_generate
     
     @staticmethod
     def decode(tokenizer):
-        def causal_decode(batch):
-            return {'input': tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=True),
-                    'labels': tokenizer.batch_decode(batch['labels'], skip_special_tokens=True)}
+        def causal_decode(**inputs):
+            return {'text': tokenizer.batch_decode(inputs['input_ids'], skip_special_tokens=True),
+                    'labels': tokenizer.batch_decode(inputs['labels'], skip_special_tokens=True)}
         
         return causal_decode
     
     @staticmethod
-    def encode( tokenizer):
-        def causal_encode(batch):
-            input_ids, attention_mask = tokenizer(batch['labels'], return_tensors='pt', padding=True).values()
-            labels = tokenizer(batch['input'], return_tensors='pt', padding=True)['input_ids']
+    def encode(tokenizer):
+        def causal_encode(**inputs):
+            new_inputs = tokenizer(inputs['labels'], return_tensors='pt', padding=True)
+            labels = tokenizer(inputs['text'], return_tensors='pt', padding=True)['input_ids']
 
-            return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': labels}
+            return new_inputs | {'labels': labels}
         
         return causal_encode
     
     @staticmethod
     def format(model, tokenizer):
-        def causal_format(batch):
-            batch = {k: v.to(model.device) for k, v in batch.items()}
-            input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
+        def causal_format(**inputs):
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+            input_ids, attention_mask, labels = inputs['input_ids'], inputs['attention_mask'], inputs['labels']
 
             labels = torch.cat((input_ids, labels), dim=-1)
             labels[labels==tokenizer.pad_token_id] = -100
@@ -90,14 +91,11 @@ class CausalCycle:
     
     @staticmethod
     def train(model):
-        def causal_train(batch):
+        def causal_train(**inputs):
             model.train()
 
-            outputs = model(
-                input_ids      = batch['input_ids'].to(model.device),
-                attention_mask = batch['attention_mask'].to(model.device),
-                labels         = batch['labels'].to(model.device),
-            )
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+            outputs = model(**inputs)
             
             return outputs
         
@@ -113,34 +111,35 @@ class Seq2SeqCycle:
         elif not isinstance(generation_config, GenerationConfig):
             raise ValueError(f"generation_config must be a dict or GenerationConfig, got {type(generation_config)}")
         
-        def seq2seq_generate(batch):
+        def seq2seq_generate(**inputs):
             model.eval()
 
-            input_ids, attention_mask = batch['input_ids'], batch['attention_mask']
-            output_ids = model.generate(
-                input_ids         = input_ids.to(model.device),
-                attention_mask    = attention_mask.to(model.device),
-                pad_token_id      = tokenizer.pad_token_id,
-                generation_config = generation_config,
-            )
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-            return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': output_ids}
+            with torch.no_grad():
+                output_ids = model.generate(
+                    **inputs,
+                    pad_token_id=tokenizer.pad_token_id,
+                    generation_config=generation_config,
+                )
+
+            return inputs | {'labels': output_ids}
         
         return seq2seq_generate
     
     @staticmethod
     def decode(tokenizer):
-        def seq2seq_decode(batch):
-            return {'input': tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=True),
-                    'labels': tokenizer.batch_decode(batch['labels'], skip_special_tokens=True)}
+        def seq2seq_decode(**inputs):
+            return {'text': tokenizer.batch_decode(inputs['input_ids'], skip_special_tokens=True),
+                    'labels': tokenizer.batch_decode(inputs['labels'], skip_special_tokens=True)}
         
         return seq2seq_decode
     
     @staticmethod
     def encode(tokenizer):
-        def seq2seq_encode(batch):
-            input_ids, attention_mask = tokenizer(batch['labels'], return_tensors='pt', padding=True).values()
-            labels = tokenizer(batch['input'], return_tensors='pt', padding=True)['input_ids']
+        def seq2seq_encode(**inputs):
+            input_ids, attention_mask = tokenizer(inputs['labels'], return_tensors='pt', padding=True).values()
+            labels = tokenizer(inputs['text'], return_tensors='pt', padding=True)['input_ids']
 
             return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': labels}
         
@@ -148,22 +147,19 @@ class Seq2SeqCycle:
     
     @staticmethod
     def format(model, tokenizer):
-        def seq2seq_format(batch):
-            batch['labels'][batch['labels']==tokenizer.pad_token_id] = -100
-            return {'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask'], 'labels': batch['labels']}
+        def seq2seq_format(**inputs):
+            inputs['labels'][inputs['labels']==tokenizer.pad_token_id] = -100
+            return {'input_ids': inputs['input_ids'], 'attention_mask': inputs['attention_mask'], 'labels': inputs['labels']}
         
         return seq2seq_format
     
     @staticmethod
     def train(model):
-        def seq2seq_train(batch):
+        def seq2seq_train(**inputs):
             model.train()
             
-            outputs = model(
-                input_ids      = batch['input_ids'].to(model.device),
-                attention_mask = batch['attention_mask'].to(model.device),
-                labels         = batch['labels'].to(model.device),
-            )
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+            outputs = model(**inputs)
             
             return outputs
         

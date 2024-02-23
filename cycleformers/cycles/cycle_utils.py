@@ -26,10 +26,10 @@ class CycleSequence:
             for idx, method in enumerate(args):
                 self.add_method(str(idx), method)
 
-    def __call__(self, input):
-        for method in self._methods.values():
-            input = method(input)
-        return input
+    def __call__(self, **inputs):
+        for i, method in enumerate(self._methods.values()):
+            inputs = method(**inputs)
+        return inputs
     
     def __len__(self):
         return len(self._methods)

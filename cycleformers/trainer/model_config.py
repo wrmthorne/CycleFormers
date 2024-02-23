@@ -1,178 +1,151 @@
 from dataclasses import dataclass, field
 import math
-from typing import Optional
+from typing import Optional, Union, Dict
 from yaml import safe_dump, safe_load
 
 from peft import PeftConfig
-from transformers import GenerationConfig
-
-PRETRAINED_MODEL_KWARGS = [
-    'pretrained_model_name_or_path',
-    'torch_dtype',
-    'trust_remote_code',
-    'use_flash_attention_2',
-]
-
-PRETRAINED_TOKENIZER_KWARGS = [
-    'pretrained_model_name_or_path',
-    'use_fast',
-    'padding_side',
-    'padding',
-    'truncation',
-]
-
-TRAINING_KWARGS = [
-    'per_device_train_batch_size',
-    'per_device_eval_batch_size',
-    'learning_rate',
-    'weight_decay',
-    'adam_beta1',
-    'adam_beta2',
-    'adam_epsilon',
-    'lr_scheduler_type',
-    'lr_scheduler_kwargs',
-    'warmup_ratio',
-    'warmup_steps',
-    'optim',
-    'optim_args',
-    'resume_from_checkpoint',
-    'hub_token',
-]
+from transformers import SchedulerType, TrainingArguments
+from transformers.training_args import OptimizerNames
 
 
 @dataclass
 class ModelConfig:
     '''
-    Configuration class for each model in the cycle
+    Will pull in unset values from TrainingArguments object from the calling trainer
     '''
-    # Model specific
-    pretrained_model_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={'help': 'The model checkpoint for weights initialization. Leave None if you want to train a model from scratch.'}
-    )
-    torch_dtype: Optional[str] = field(
-        default=None,
-        metadata={
-            'help': (
-                'Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the '
-                'dtype will be automatically derived from the model\'s weights.'
-            ),
-            'choices': ['auto', 'bfloat16', 'float16', 'float32'],
-        },
-    )
-    trust_remote_code: bool = field(
-        default=False,
-        metadata={'help': 'Trust remote code when loading a model.'}
-    )
-    use_flash_attention_2: bool = field(
-        default=False,
-        metadata={'help': 'Use Flash attention for the model. This is a separate package that must be installed from `flash-attn`.'}
-    )
-
-    # PEFT specific
-    peft_config: Optional[PeftConfig] = field(
-        default=None,
-        metadata={'help': 'PEFT configuration for the model. Leave None to not use PEFT.'}
-    )
-
-    # Generation specific
-    generation_config: Optional[GenerationConfig] = field(
-        default=GenerationConfig(),
-        metadata={'help': 'The generation configuration for the model.'}
-    )
-
-    # Training specific
     per_device_train_batch_size: int = field(
-        default=4,
-        metadata={'help': 'The batch size per GPU for training.'}
+        default=None,
+        metadata={"help": "Batch size per GPU/TPU/MPS/NPU core/CPU for training."}
     )
     per_device_eval_batch_size: int = field(
-        default=4,
-        metadata={'help': 'The batch size per GPU for evaluation.'}
+        default=None,
+        metadata={"help": "Batch size per GPU/TPU/MPS/NPU core/CPU for evaluation."}
+    )
+    per_gpu_train_batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Deprecated, the use of `--per_device_train_batch_size` is preferred. "
+                "Batch size per GPU/TPU core/CPU for training."
+            )
+        },
+    )
+    per_gpu_eval_batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Deprecated, the use of `--per_device_eval_batch_size` is preferred. "
+                "Batch size per GPU/TPU core/CPU for evaluation."
+            )
+        },
+    )
+    gradient_accumulation_steps: int = field(
+        default=None,
+        metadata={"help": "Number of updates steps to accumulate before performing a backward/update pass."},
+    )
+    eval_accumulation_steps: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of predictions steps to accumulate before moving the tensors to the CPU."},
+    )
+    eval_delay: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Number of epochs or steps to wait for before the first evaluation can be performed, depending on the"
+                " evaluation_strategy."
+            )
+        },
     )
     learning_rate: float = field(
-        default=1e-4,
-        metadata={'help': 'The learning rate for the model.'}
+        default=None,
+        metadata={"help": "The initial learning rate for AdamW."}
     )
     weight_decay: float = field(
-        default=0.0,
-        metadata={'help': 'The weight decay for the model.'}
+        default=None,
+        metadata={"help": "Weight decay for AdamW if we apply some."}
     )
     adam_beta1: float = field(
-        default=0.9,
-        metadata={'help': 'The beta1 value for the Adam optimizer.'}
+        default=None,
+        metadata={"help": "Beta1 for AdamW optimizer"}
     )
     adam_beta2: float = field(
-        default=0.999,
-        metadata={'help': 'The beta2 value for the Adam optimizer.'}
+        default=None,
+        metadata={"help": "Beta2 for AdamW optimizer"}
     )
     adam_epsilon: float = field(
-        default=1e-8,
-        metadata={'help': 'The epsilon value for the Adam optimizer.'}
-    )
-    lr_scheduler_type: str = field(
-        default='linear',
-        metadata={'help': 'The learning rate scheduler type.'}
-    )
-    lr_scheduler_kwargs: Optional[dict] = field(
         default=None,
-        metadata={'help': 'The learning rate scheduler kwargs.'}
+        metadata={"help": "Epsilon for AdamW optimizer."}
+    )
+    max_grad_norm: float = field(
+        default=None,
+        metadata={"help": "Max gradient norm."}
+    )
+    num_train_epochs: float = field(
+        default=None,
+        metadata={"help": "Total number of training epochs to perform."}
+    )
+    max_steps: int = field(
+        default=None,
+        metadata={"help": "If > 0: set total number of training steps to perform. Override num_train_epochs."},
+    )
+    lr_scheduler_type: Union[SchedulerType, str] = field(
+        default=None,
+        metadata={"help": "The scheduler type to use."},
+    )
+    lr_scheduler_kwargs: Optional[Dict] = field(
+        default_factory=dict,
+        metadata={
+            "help": (
+                "Extra parameters for the lr_scheduler such as {'num_cycles': 1} for the cosine with hard restarts"
+            )
+        },
     )
     warmup_ratio: float = field(
-        default=0.0,
-        metadata={'help': 'The warmup ratio for the learning rate scheduler.'}
+        default=None,
+        metadata={"help": "Linear warmup over warmup_ratio fraction of total steps."}
     )
     warmup_steps: int = field(
-        default=0,
-        metadata={'help': 'The warmup steps for the learning rate scheduler.'}
+        default=None,
+        metadata={"help": "Linear warmup over warmup_steps."}
     )
-    optim: str = field(
-        default='adamw_torch',
-        metadata={'help': 'The optimizer to use.'}
+    gradient_checkpointing: bool = field(
+        default=None,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    gradient_checkpointing_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Gradient checkpointing key word arguments such as `use_reentrant`. Will be passed to `torch.utils.checkpoint.checkpoint` through `model.gradient_checkpointing_enable`."
+        },
+    )
+    optim: Union[OptimizerNames, str] = field(
+        default=None,
+        metadata={"help": "The optimizer to use."},
     )
     optim_args: Optional[str] = field(
         default=None,
-        metadata={'help': 'The optimizer kwargs.'}
+        metadata={"help": "Optional arguments to supply to optimizer."},
     )
-    resume_from_checkpoint: Optional[str] = field(
-        default=None,
-        metadata={'help': 'The path to a checkpoint from which to resume training.'}
-    )
-    hub_token: Optional[str] = field(
-        default=None,
-        metadata={'help': 'The Hugging Face model hub token.'}
-    )
+    
 
-    # Tokenizer specific
-    padding_side: str = field(
-        default='right',
-        metadata={'help': 'The side to pad on.'}
-    )
-    use_fast: bool = field(
-        default=True,
-        metadata={'help': 'Use fast tokenizers.'}
-    )
-    padding: str = field(
-        default=False,
-        metadata={'help': 'The padding strategy.'}
-    )
-    truncation: str = field(
-        default=False,
-        metadata={'help': 'The truncation strategy.'}
-    )
+    def fill_from_training_args(self, training_args: TrainingArguments):
+        '''
+        Fills in any unset values from the `training_args` object. This is allows global training
+        arguments to be set and then specific model training arguments to be set on top of them.
+        '''
+        if not isinstance(training_args, TrainingArguments):
+            raise ValueError(f'`training_args` must be an instance of `TrainingArguments` class. Got {type(training_args)} instead.')
+        
+        for key, value in self.__dict__.items():
+            if value is None:
+                setattr(self, key, getattr(training_args, key))
 
-    def __post_init__(self):
-        if self.peft_config is not None and not isinstance(self.peft_config, PeftConfig):
-            raise ValueError(f'`peft_config` must be an instance of `PeftConfig` class. Got {type(self.peft_config)} instead.')
-    
-    def pretrained_model_kwargs(self):
-        return {k: v for k, v in self.to_dict().items() if k in PRETRAINED_MODEL_KWARGS}
-    
-    def pretrained_tokenizer_kwargs(self):
-        return {k: v for k, v in self.to_dict().items() if k in PRETRAINED_TOKENIZER_KWARGS}
-    
-    def training_kwargs(self):
-        return {k: v for k, v in self.to_dict().items() if k in TRAINING_KWARGS}
+
+    # def __post_init__(self):
+    #     if self.peft_config is not None and not isinstance(self.peft_config, PeftConfig):
+    #         raise ValueError(f'`peft_config` must be an instance of `PeftConfig` class. Got {type(self.peft_config)} instead.')
     
     # https://github.com/huggingface/transformers/blob/main/src/transformers/training_args.py
     def get_warmup_steps(self, num_training_steps: int) -> int:

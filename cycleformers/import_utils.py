@@ -2,16 +2,16 @@ import importlib
 import os
 import yaml
 
-from transformers import GenerationConfig
+from transformers import GenerationConfig, TrainingArguments
 
-from .trainer import ModelConfig, TrainerConfig
+from .trainer import ModelConfig
 
 
 
 YAML_HEADERS_TO_CONFIG_CLASS_MAPPING = {
     'generation': GenerationConfig,
     'model': ModelConfig,
-    'trainer': TrainerConfig,
+    'trainer': TrainingArguments,
 }
 
 def is_peft_available() -> bool:

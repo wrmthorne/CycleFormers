@@ -6,7 +6,6 @@ from pytorch_lightning import Trainer
 from torch.utils.data import DataLoader
 from transformers import DataCollator
 
-from .trainer_config import TrainerConfig
 from .trainer_utils import prepare_data_collator, validate_data_collator, validate_train_dataset
 
 from cycleformers.core import TrainCycle
@@ -16,7 +15,7 @@ class CycleTrainer(Trainer):
     def __init__(
         self,
         model = None,
-        args: TrainerConfig = None,
+        args = None,
         data_collator_A: Optional[DataCollator] = None,
         data_collator_B: Optional[DataCollator] = None,
         train_dataset_A: Optional[Dataset] = None,
@@ -24,8 +23,8 @@ class CycleTrainer(Trainer):
         eval_dataset_A: Optional[Dataset] = None,
         eval_dataset_B: Optional[Dataset] = None,
     ):
-        if args is None:
-            args = TrainerConfig()
+        # if args is None:
+        #     args = TrainerConfig()
 
         self.args = args
 

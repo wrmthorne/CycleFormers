@@ -1,10 +1,7 @@
 from collections import OrderedDict
-import logging
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 from datasets import Dataset
-from lightning.pytorch.utilities import CombinedLoader
-from pytorch_lightning import LightningModule, Trainer
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -12,20 +9,26 @@ from transformers import (
     DataCollator,
     DataCollatorForLanguageModeling,
     DataCollatorForSeq2Seq,
+    GenerationConfig,
     PreTrainedTokenizerBase,
     PreTrainedModel,
-    Trainer as HFTrainer,
+    Trainer,
+    TrainerState,
+    TrainingArguments,
 )
 from transformers.optimization import get_scheduler
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+from transformers.utils import logging
 
 from cycleformers.cycles import CausalCycle, Seq2SeqCycle
 from cycleformers.cycles.cycle_utils import CycleSequence
+from cycleformers.data import CombinedLoader
 from ..import_utils import is_peft_available
 from .model_config import ModelConfig
-from .trainer_config import TrainerConfig
+from .model_handler import ModelHandler
 from .trainer_utils import (
     get_parameter_names,
+    has_length,
     validate_collator_new,
     validate_tokenizer,
 )
@@ -38,19 +41,23 @@ logger = logging.get_logger(__name__)
 
 
 # TODO: Add support for multi-adapter
-def init_cycle(self, gen_model, gen_tokenizer, gen_config, train_model, train_tokenizer, train_config):
-    gen_cycle = Seq2SeqCycle if getattr(gen_config, 'is_encoder_decoder', False) else CausalCycle
-    train_cycle = Seq2SeqCycle if getattr(train_config, 'is_encoder_decoder', False) else CausalCycle
+def init_cycle(gen_model, gen_tokenizer, gen_model_generation_config, train_model, train_tokenizer):
+    gen_cycle = Seq2SeqCycle if gen_model.config.is_encoder_decoder else CausalCycle
+    train_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
+
+    skip_reencode = gen_tokenizer.get_vocab() == train_tokenizer.get_vocab() and type(gen_tokenizer) == type(train_tokenizer)
 
     cycle_stages = CycleSequence(OrderedDict({
-        'Generate Synthetic IDs': gen_cycle.generate(gen_model, gen_tokenizer, gen_config.generation_config),
+        'Generate Synthetic IDs': gen_cycle.generate(gen_model, gen_tokenizer, gen_model_generation_config),
     }))
 
-    if not self.skip_reencode:
+    if not skip_reencode:
         cycle_stages.extend(OrderedDict({
             'Decode Synthetic IDs to Text': gen_cycle.decode(gen_tokenizer),
             'Encode Synthetic Text to Train IDs': train_cycle.encode(train_tokenizer)
         }))
+    else:
+        print('Skipping re-encoding')
 
     cycle_stages.extend(OrderedDict({
         'Format Synthetic Train IDs': train_cycle.format(train_model, train_tokenizer),
@@ -62,8 +69,8 @@ def init_cycle(self, gen_model, gen_tokenizer, gen_config, train_model, train_to
 
 class CycleTrainer(Trainer):
     '''
-    CycleTrainer is a wrapper class for the PyTorch Lightning Trainer class, specifically designed to
-    train models using cycle consistency training.
+    CycleTrainer is a wrapper class for the Huggingface Trainer class, specifically designed to
+    train models using cycle consistency training but aiming to be a generic multi-model trainer.
 
     Args:
         models (`dict` or `PeftModel`, *required*):
@@ -102,7 +109,7 @@ class CycleTrainer(Trainer):
         self,
         models: Union[Dict[str, Union[PreTrainedModel, nn.Module]], 'PeftModel'],
         tokenizers: Union[Dict[str, PreTrainedTokenizerBase], PreTrainedTokenizerBase],
-        args: Optional[TrainerConfig] = None,
+        args: Optional[TrainingArguments] = None,
         model_args: Optional[Union[Dict[str, ModelConfig], ModelConfig]] = dict(),
         data_collators: Optional[Union[Dict[str, DataCollator], DataCollator]] = dict(),
         train_datasets: Optional[Dict[str, Dataset]] = dict(),
@@ -110,13 +117,16 @@ class CycleTrainer(Trainer):
         # model_init                    TODO: implement later
         # compute_metrics               TODO: implement later
         # callbacks                     TODO: implement later
-        optimizers: Dict[Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]] = dict(),
+        optimizers: Optional[Dict[str, Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]]] = dict(),
         # preprocess_logits_for_metrics TODO: implement later
     ) -> None:
-        # TODO: How to handle training args for each model separately?
+        # TODO: Load Trainer args as default and overwrite them with model args if present. Warn if overwriting
         if args is None:
-            args = TrainerConfig()
+            args = TrainingArguments(output_dir='./models')
         self.args = args
+
+        log_level = args.get_process_log_level()
+        logging.set_verbosity(log_level)
 
         # Validate models
         if isinstance(models, dict):
@@ -167,9 +177,12 @@ class CycleTrainer(Trainer):
                         f'Expected model_args to be a ModelConfig, got {type(model_args[name])}.'
                     )
                 
-            else:
-                model_args = {name: model_args for name in self.model_names}
+        else:
+            model_args = {name: model_args for name in self.model_names}
             
+        for name in self.model_names:
+            model_args[name].fill_from_training_args(self.args)
+
         self.model_args = model_args
 
         # Tokenizer validation
@@ -211,6 +224,9 @@ class CycleTrainer(Trainer):
         self.optimizers = optimizers
         self.create_optimizers_and_schedulers()
 
+        # TODO: Remove later when properly implemented
+        self.__post_init__()
+
     def __post_init__(self):
         '''
         Currently adding cycle consistency training specific attributes here. May be moved in the future
@@ -222,16 +238,18 @@ class CycleTrainer(Trainer):
         # TODO: Add support for multi-adapter
         # TODO: Add support for 3+ models
         name_A, name_B = self.model_names
-        self.models = {
+
+        self.cycles = {
             name_A: init_cycle(
-                self.models[name_A], self.tokenizers[name_A], self.model_args[name_A],
-                self.models[name_B], self.tokenizers[name_B], self.model_args[name_B]
+                self.models[name_A], self.tokenizers[name_A], GenerationConfig(),
+                self.models[name_B], self.tokenizers[name_B],
             ),
             name_B: init_cycle(
-                self.models[name_B], self.tokenizers[name_B], self.model_args[name_B],
-                self.models[name_A], self.tokenizers[name_A], self.model_args[name_A]
-            )
+                self.models[name_B], self.tokenizers[name_B], GenerationConfig(),
+                self.models[name_A], self.tokenizers[name_A],
+            ),
         }
+
 
     def create_tokenizers(self) -> None:
         '''
@@ -334,18 +352,6 @@ class CycleTrainer(Trainer):
 
         return CombinedLoader(data_loaders, 'max_size')
     
-    # https://github.com/huggingface/transformers/blob/main/src/transformers/trainer.py
-    def get_decay_parameter_names(self, model) -> List[str]:
-        '''
-        Get all parameter names that weight decay will be applied to
-
-        Note that some models implement their own layernorm instead of calling nn.LayerNorm, weight decay could still
-        apply to those modules since this function only filter out instance of nn.LayerNorm
-        '''
-        decay_parameters = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
-        decay_parameters = [name for name in decay_parameters if 'bias' not in name]
-        return decay_parameters
-    
 
     def create_optimizers_and_schedulers(self):
         '''
@@ -357,8 +363,9 @@ class CycleTrainer(Trainer):
                 f'{self.model_names}, got {list(self.optimizers.keys())}.'
             )
 
+        self.lr_schedulers = {}
         for name, model in self.models.items():
-            if self.optimizers[name] == (None, None):
+            if self.optimizers.get(name, (None, None)) == (None, None):
                 decay_parameters = self.get_decay_parameter_names(model)
                 optimizer_grouped_parameters = [
                     {
@@ -375,17 +382,18 @@ class CycleTrainer(Trainer):
                     },
                 ]
 
-                optimizer_cls, optimizer_kwargs = HFTrainer.get_optimizer_cls_and_kwargs(self.self.model_args[name])
+                optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.model_args[name])
                 optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
                 scheduler = get_scheduler(
-                    self.self.model_args[name].lr_scheduler_type,
+                    self.model_args[name].lr_scheduler_type,
                     optimizer=optimizer, 
-                    num_warmup_steps=self.self.model_args[name].get_warmup_steps(-1),
-                    num_training_steps=self.self.model_args[name].max_steps,
-                    scheduler_specific_kwargs=self.self.model_args[name].lr_scheduler_kwargs,
+                    num_warmup_steps=self.model_args[name].get_warmup_steps(-1),
+                    num_training_steps=self.model_args[name].max_steps,
+                    scheduler_specific_kwargs=self.model_args[name].lr_scheduler_kwargs,
                 )
 
-                self.optimizers[name] = (optimizer, scheduler)
+                self.optimizers[name] = optimizer
+                self.lr_schedulers[name] = scheduler
 
     def train(self):
         '''
@@ -403,15 +411,33 @@ class CycleTrainer(Trainer):
         MORE COMPATABILITY STUFF WILL BE ADDED HERE EVENTUALLY
         '''
         
-        train_dataloader = self.get_train_dataloader()
+        train_dataloader = iter(self.get_train_dataloader()) # TODO: Fix this stupid need to call iter
+
+        len_dataloader = None
+        num_train_tokens = None
+        if has_length(train_dataloader):
+            num_examples = self.num_examples(train_dataloader)
+            
+
+        self.global_state = TrainerState() # TODO: How to handle state for multiple sub models?
+
+        self.model_states = {}
+        for name, model in self.models.items():
+            self.model_states[name] = TrainerState()
+            model.zero_grad()
 
         # Train!
-        logger.info("***** Running training *****")
+        logger.info('***** Running training *****')
+        logger.info(f'  Num examples = {num_examples:,}')
 
+
+        epochs_trained = 0
         steps_trained_in_current_epoch = 0
+        steps_trained_progress_bar = None
 
         total_batched_samples = 0
-        for epoch in range(self.args.num_train_epochs):
+        # TODO: Handle variable number of epochs between models
+        for epoch in range(int(max(self.model_args[name].num_train_epochs for name in self.model_names))):
             epoch_iterator = train_dataloader
 
             steps_in_epoch = len(epoch_iterator)
@@ -427,11 +453,12 @@ class CycleTrainer(Trainer):
                     if model_inputs is None:
                         continue
 
-                    tr_loss_step = self.training_step(model, model_inputs) / self.model_args[name].gradient_accumulation_steps
+                    tr_loss_step = self.training_step(self.cycles[name], model_inputs) / self.model_args[name].gradient_accumulation_steps
+                    print(tr_loss_step)
 
                     if total_batched_samples % self.model_args[name].gradient_accumulation_steps == 0:
                         self.optimizers[name].step()
-                        self.lr_scheduler[name].step()
+                        self.lr_schedulers[name].step()
 
                     model.zero_grad()
 

@@ -6,8 +6,6 @@ __version__ = '0.0.0.dev0'
 REQUIRED_PKGS = [
     'transformers>=4.31.0',
     'torch>=1.4.0',
-    'pytorch-lightning>=2.1.0',
-    'lightning>=2.1.0',
     'datasets'
 ]
 
@@ -38,7 +36,7 @@ setup(
     long_description_content_type="text/markdown",
     version=__version__,
     description='Train transformer language models with cycle consistency training.',
-    keywords='transformers, pytorch, pytorch-lightning, cycle consistency training, language modeling',
+    keywords='transformers, pytorch, cycle consistency training, language modeling',
     author='William Thorne',
     author_email='wthorne1@sheffield.ac.uk',
 )

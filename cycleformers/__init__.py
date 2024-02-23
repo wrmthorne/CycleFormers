@@ -5,5 +5,4 @@ from .models import CycleModel
 from .trainer import (
     CycleTrainer,
     ModelConfig,
-    TrainerConfig
 )
