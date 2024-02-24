@@ -2811,7 +2811,7 @@ class ModelTrainingArguments(
     def __post_init__(self):
         return super().__post_init__()
     
-    def update_from_global_args(self, global_args: TrainingArguments) -> None:
+    def update_from_global_args(self, global_args: TrainingArguments) -> 'ModelTrainingArguments':
         '''
         Updates model training arguments with any global training arguments. If a variable is set
         in both the global training arguments and the model training arguments, the model training
@@ -2824,3 +2824,5 @@ class ModelTrainingArguments(
         for field in fields(self):
             if getattr(self, field.name) == field.default:
                 setattr(self, field.name, getattr(global_args, field.name))
+
+        return self

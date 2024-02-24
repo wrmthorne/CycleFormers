@@ -1,8 +1,7 @@
-import os
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from collections import OrderedDict
+from typing import Dict, Optional, Tuple, Union
 
 from datasets import Dataset
-import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
@@ -11,13 +10,10 @@ from transformers import (
     DataCollator,
     DataCollatorForLanguageModeling,
     DataCollatorForSeq2Seq,
-    DataCollatorWithPadding,
-    default_data_collator,
-    EvalPrediction,
+    GenerationConfig,
     PreTrainedTokenizerBase,
     PreTrainedModel,
     Trainer,
-    TrainerCallback,
     TrainerState,
 )
 from transformers.optimization import get_scheduler
@@ -85,7 +81,6 @@ class CycleTrainer(Trainer):
             values should be a tuple of the optimizer and the learning rate scheduler. Will default to
             AdamW and a linear learning rate scheduler if nothing is supplied for any specific model.
     '''
-    # TODO: Fix type hinting
     def __init__(
         self,
         models: Union[Dict[str, Union[PreTrainedModel, nn.Module]], 'PeftModel'],
@@ -95,11 +90,11 @@ class CycleTrainer(Trainer):
         data_collators: Optional[Union[Dict[str, DataCollator], DataCollator]] = dict(),
         train_datasets: Optional[Dict[str, Dataset]] = dict(),
         eval_datasets: Optional[Dict[str, Dataset]] = None,
-        model_init: Optional[Dict[str, Callable[[], PreTrainedModel]]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        callbacks: Optional[Union[Dict[str, List[TrainerCallback]], List[TrainerCallback]]] = None,
+        # model_init                    TODO: implement later
+        # compute_metrics               TODO: implement later
+        # callbacks                     TODO: implement later
         optimizers: Optional[Dict[str, Tuple[Optimizer, LambdaLR]]] = dict(),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        # preprocess_logits_for_metrics TODO: implement later
     ) -> None:
         # TODO: Load Trainer args as default and overwrite them with model args if present. Warn if overwriting
         if args is None:
@@ -117,55 +112,159 @@ class CycleTrainer(Trainer):
         log_level = args.get_process_log_level()
         logging.set_verbosity(log_level)
 
-        # TODO: Handle case where any arg is not a dict
-        self._model_names = list(models.keys())
+        # Validate models
+        if isinstance(models, dict):
+            if len(models) < 2:
+                raise ValueError(f'Expected at least 2 models, got {len(models)}')
+            
+            self.model_names = list(models.keys())
+        else:
+            if not is_peft_available():
+                raise ValueError(
+                    'You have supplied only one model but PEFT is not installed. Please install '
+                    'PEFT to use a single model with multiple adapters.'
+                )
 
-        self.handlers = {
-            name: _ModelHandler(
-                models[name],
-                model_args.get(name, ModelTrainingArguments(
-                    output_dir=os.path.join(args.output_dir, name)
-                ).update_from_global_args(args)),
-                tokenizers[name],
-                model_init=model_init.get(name, None),
-                compute_metrics=compute_metrics.get(name, None),
-                callbacks=callbacks.get(name, None),
-                optimizers=optimizers.get(name, (None, None)),
-                preprocess_logits_for_metrics=preprocess_logits_for_metrics.get(name, None),
-            ) for name in self.model_names
-        }
+            if not isinstance(models, PeftModel):
+                raise ValueError(
+                    'Single models must be of type PeftModel with 2 or more attached adapters. '
+                    f'Instead got {type(models)}. To use multiple models, please supply a dictionary '
+                    'of models.'
+                )
+            
+            if (num_adapters := len(models.peft_config.keys())) < 2:
+                raise ValueError(f'Expected at least 2 adapters, got {num_adapters}')
+            
+            self.model_names = list(models.peft_config.keys())
+            models = {name: models for name in self.model_names}
 
-        for name, handler in self.handlers.items():
-            collator = data_collators.get(name, None)
-            if collator is None:
-                if handler.tokenizer is None:
-                    data_collators[name] = default_data_collator
-                else:
-                    data_collators[name] = DataCollatorWithPadding(handler.tokenizer)
-            else:
-                if not callable(collator) and callable(getattr(collator, "collate_batch", None)):
-                    raise ValueError(
-                        f'Invalid data collator for model {name}. Must be a callable and have a '
-                         'collate_batch method.'
-                    )
+        self.models = models
 
-        if not set(self._model_names) == set(train_datasets.keys()):
-            raise ValueError('Training datasets must be supplied for all models.')
-        
-        if any(name not in self._model_names for name in eval_datasets):
+        # Validate model configs
+        if not isinstance(model_args, (dict, ModelTrainingArguments)):
             raise ValueError(
-                f'Unrecognised model names in eval_datasets. Expected {self._model_names}, '
-                f'got {list(eval_datasets.keys())}.'
+                f'Expected model_args to be a dictionary with keys matching model names '
+                f'{self.model_names}. Instead got {type(model_args)}')
+        
+        if isinstance(model_args, dict):
+            if any(name not in self.model_names for name in model_args.keys()):
+                raise ValueError(
+                    f'Model args contains a key not found in models. Expected keys to be a subset of '
+                    f'{self.model_names}, got {list(model_args.keys())}.'
+                )
+            
+            for name in self.model_names:
+                if name not in model_args:
+                    model_args[name] = ModelTrainingArguments()
+                elif not isinstance(model_args[name], ModelTrainingArguments):
+                    raise ValueError(
+                        f'Expected model_args to be a ModelConfig, got {type(model_args[name])}.'
+                    )
+                
+        else:
+            model_args = {name: model_args for name in self.model_names}
+            
+        for name in self.model_names:
+            model_args[name].fill_from_training_args(self.args)
+
+        self.model_args = model_args
+
+        # Tokenizer validation
+        self.tokenizers = tokenizers
+        self.create_tokenizers()
+        
+        # Validate collators
+        self.data_collators = data_collators
+        self.create_data_collators()
+                
+        # Validate datasets
+        if not isinstance(train_datasets, dict):
+            raise ValueError(f'Expected train_datasets to be a dictionary, got {type(train_datasets)}')
+        
+        if self.model_names != list(train_datasets.keys()):
+            raise ValueError(
+                f'Expected train_datasets to have keys {self.model_names}, got '
+                f'{list(train_datasets.keys())}. Please ensure that the keys in train_datasets '
+                'match the keys in models.'
             )
         
-        self.data_collators = data_collators
+        for name, dataset in train_datasets.items():
+            if dataset is None:
+                raise ValueError(f'Training dataset for model {name} is None. Please supply a dataset.')
+            
         self.train_datasets = train_datasets
-        self.eval_datasets = eval_datasets
 
-        # TODO: FINISH THIS
+        if not isinstance(eval_datasets, dict):
+            raise ValueError(f'Expected eval_datasets to be a dictionary, got {type(eval_datasets)}')
+        
+        # Can have eval datasets for subset of models
+        if any(name not in self.model_names for name in eval_datasets.keys()):
+            raise ValueError(
+                f'Eval datasets contains a key not found in models. Expected keys to be a subset of '
+                f'{self.model_names}, got {list(eval_datasets.keys())}.'
+            )
+        
+        self.model_handlers = {name: _ModelHandler(
+            model=self.models[name],
+            args=self.model_args[name],
+            tokenizer=self.tokenizers[name],
+            optimizer=optimizers.get(name, (None, None)),
+        ) for name in self.model_names}
         
 
+        # TODO: Remove later when properly implemented
+        self.__post_init__()
+
         self._memory_tracker.stop_and_update_metrics()
+
+
+    def create_tokenizers(self) -> None:
+        '''
+        Method to create and validate the tokenizers for the models.
+        '''
+        if not isinstance(self.tokenizers, (dict, PreTrainedTokenizerBase)):
+            raise ValueError(
+                'Expected tokenizers to be a dictionary of tokenizers or a PreTrainedTokenizerBase, got '
+                f'{type(self.tokenizers)}.')
+        
+        if isinstance(self.tokenizers, dict):
+            if self.model_names != list(self.tokenizers.keys()):
+                raise ValueError(
+                    f'Expected tokenizers to have keys {self.model_names}, got '
+                    f'{list(self.tokenizers.keys())}. Please ensure that the keys in tokenizers '
+                    'match the keys in models.'
+                )  
+        else:
+            self.tokenizers = {name: self.tokenizers for name in self.model_names}
+
+        # Check to see if tokenizers are correct for model type
+        for name, tokenizer in self.tokenizers.items():
+            validate_tokenizer(tokenizer, self.models[name])
+
+    def create_data_collators(self) -> None:
+        '''
+        Method to create and validate the data collators for the models.
+        '''
+        if isinstance(self.data_collators, dict):
+            if any(name not in self.model_names for name in self.data_collators.keys()):
+                raise ValueError(
+                    f'Data collators contains a key not found in models. Expected keys to be a subset of '
+                    f'{self.model_names}, got {list(self.data_collators.keys())}.'
+                )
+            
+            for name in self.model_names:
+                if name not in self.data_collators:
+                    if self.models[name].config.is_encoder_decoder:
+                        self.data_collators[name] = DataCollatorForSeq2Seq(self.tokenizers[name])
+                    else:
+                        self.data_collators[name] = DataCollatorForLanguageModeling(self.tokenizers[name], mlm=False)
+
+        else:
+            self.data_collators = {name: self.data_collators for name in self.model_names}
+
+        # Check to see if collators are correct for model type
+        for name, collator in self.data_collators.items():
+            validate_collator_new(collator, self.models[name])
             
 
     def get_train_dataloader(self) -> DataLoader:

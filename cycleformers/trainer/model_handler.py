@@ -1,5 +1,8 @@
+import os
 from typing import Callable, Dict, List, Tuple, Optional, Union
+import warnings
 
+from packaging import version
 import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
@@ -8,6 +11,7 @@ from transformers import (
     EvalPrediction,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    PrinterCallback,
     Trainer,
     TrainerCallback,
     TrainerControl,
@@ -15,16 +19,40 @@ from transformers import (
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.models.auto.modeling_auto import MODEL_MAPPING_NAMES
-from transformers.trainer import DEFAULT_CALLBACKS
+from transformers.trainer import (
+    DEFAULT_CALLBACKS,
+    DEFAULT_PROGRESS_CALLBACK,
+    _is_peft_model,
+    ParallelMode,
+)
 from transformers.trainer_callback import CallbackHandler
 from transformers.utils import logging
 from transformers.utils.generic import can_return_loss
-from transformers.utils.import_utils import is_peft_available
+from transformers.utils.import_utils import (
+    is_apex_available,
+    is_sagemaker_mp_enabled,
+    is_torch_compile_available,
+    is_torch_tpu_available,
+
+)
+from transformers.utils.quantization_config import QuantizationMethod
 
 from .training_args import ModelTrainingArguments
 
-if is_peft_available():
-    from peft import PeftModel
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+    from smdistributed.modelparallel import __version__ as SMP_VERSION
+
+    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
+
+    from transformers.trainer_pt_utils import (
+        smp_forward_backward,
+        smp_forward_only,
+        smp_gather,
+        smp_nested_concat,
+    )
+else:
+    IS_SAGEMAKER_MP_POST_1_10 = False
 
 
 logger = logging.get_logger(__name__)
@@ -35,22 +63,31 @@ class _ModelHandler:
     Class to hold model, tokenizer, optimizer and scheduler and model specific training arguments
     in one place to make it easier to pass around. This class is not meant to be used directly.
     '''
+    add_callback = Trainer.add_callback
+    call_model_init = Trainer.call_model_init
     create_optimiser_and_scheduler = Trainer.create_optimizer_and_scheduler
     create_accelerator_and_postprocess = Trainer.create_accelerator_and_postprocess
     is_local_process_zero = Trainer.is_local_process_zero
     is_world_process_zero = Trainer.is_world_process_zero
     _move_model_to_device = Trainer._move_model_to_device
+    pop_callback = Trainer.pop_callback
+    remove_callback = Trainer.remove_callback
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module, 'PeftModel'],
-        args: ModelTrainingArguments,
-        tokenizer: PreTrainedTokenizerBase,
-        optimizers: Optional[Tuple[Optimizer, LambdaLR]],
-        callbacks: Optional[List[TrainerCallback]] = None,
+        model: Union[PreTrainedModel, nn.Module] = None,
+        args: ModelTrainingArguments = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: Optional[Tuple[Optimizer, LambdaLR]] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ):
+        if args is None:
+            output_dir = "tmp_trainer"
+            logger.info(f"No `ModelTrainingArguments` passed, using `output_dir={output_dir}`.")
+            args = ModelTrainingArguments(output_dir=output_dir)
         self.args = args
         self.hp_name = None
         self.deepspeed = None
@@ -63,6 +100,22 @@ class _ModelHandler:
         # set the correct log level depending on the node
         log_level = args.get_process_log_level()
         logging.set_verbosity(log_level)
+
+        if model is None:
+            if model_init is not None:
+                self.model_init = model_init
+                model = self.call_model_init()
+            else:
+                raise RuntimeError("`Trainer` requires either a `model` or `model_init` argument")
+        else:
+            if model_init is not None:
+                warnings.warn(
+                    "`Trainer` requires either a `model` or `model_init` argument, but not both. `model_init` will"
+                    " overwrite your model when calling the `train` method. This will become a fatal error in the next"
+                    " release.",
+                    FutureWarning,
+                )
+            self.model_init = model_init
 
         if model.__class__.__name__ in MODEL_MAPPING_NAMES:
             raise ValueError(
@@ -96,18 +149,56 @@ class _ModelHandler:
                     'Parallel models are untested in this version oc CycleFormers. Please report any issues you encounter.'
                 )
 
+        _is_quantized_and_base_model = getattr(model, "is_quantized", False) and not getattr(
+            model, "_hf_peft_config_loaded", False
+        )
+
+        # At this stage the model is already loaded
+        if _is_quantized_and_base_model and not _is_peft_model(model):
+            raise ValueError(
+                "You cannot perform fine-tuning on purely quantized models. Please attach trainable adapters on top of"
+                " the quantized model to correctly perform fine-tuning. Please see: https://huggingface.co/docs/transformers/peft"
+                " for more details"
+            )
+        elif _is_quantized_and_base_model and not getattr(model, "_is_quantized_training_enabled", False):
+            raise ValueError(
+                "The model you want to train is loaded in 8-bit precision.  if you want to fine-tune an 8-bit"
+                " model, please make sure that you have installed `bitsandbytes>=0.37.0`. "
+            )
+
+        self.is_fsdp_xla_enabled = args.fsdp_config["xla"]
+        if len(args.fsdp) > 0:
+            if self.is_deepspeed_enabled:
+                raise ValueError(
+                    "Using --fsdp xxx together with --deepspeed is not possible, deactivate one of those flags."
+                )
+            if not args.fsdp_config["xla"] and args.parallel_mode != ParallelMode.DISTRIBUTED:
+                raise ValueError("Using fsdp only works in distributed training.")
+
+        # one place to sort out whether to place the model on device or not
+        # postpone switching model to cuda when:
+        # 1. MP - since we are trying to fit a much bigger than 1 gpu model
+        # 2. fp16-enabled DeepSpeed loads the model in half the size and it doesn't need .to() anyway,
+        #    and we only use deepspeed for training at the moment
+        # 3. full bf16 or fp16 eval - since the model needs to be cast to the right dtype first
+        # 4. FSDP - same as MP
         self.place_model_on_device = args.place_model_on_device
         if (
             self.is_model_parallel
             or self.is_deepspeed_enabled
-            # TODO: Add other conditions as they are implemented
+            or ((args.fp16_full_eval or args.bf16_full_eval) and not args.do_train)
+            or self.is_fsdp_xla_enabled
             or self.is_fsdp_enabled
         ):
             self.place_model_on_device = False
 
         self.tokenizer = tokenizer
 
-        if self.place_model_on_device:
+        # Bnb Quantized models doesn't support `.to` operation.
+        if (
+            self.place_model_on_device
+            and not getattr(model, "quantization_method", None) == QuantizationMethod.BITS_AND_BYTES
+        ):
             self._move_model_to_device(model, args.device)
         
         # Force n_gpu to 1 to avoid DataParallel as MP will manage the GPUs
@@ -118,29 +209,84 @@ class _ModelHandler:
         self.model_wrapped = model
         self.model = model
 
+        self.neftune_noise_alpha = args.neftune_noise_alpha
+
         self.compute_metrics = compute_metrics
         self.preprocess_logits_for_metrics = preprocess_logits_for_metrics
         self.optimizer, self.lr_scheduler = optimizers
-
-        if (self.is_deepspeed_enabled or self.is_fsdp_enabled) and (
+        if model_init is not None and (self.optimizer is not None or self.lr_scheduler is not None):
+            raise RuntimeError(
+                "Passing a `model_init` is incompatible with providing the `optimizers` argument. "
+                "You should subclass `Trainer` and override the `create_optimizer_and_scheduler` method."
+            )
+        if is_torch_tpu_available() and self.optimizer is not None:
+            for param in self.model.parameters():
+                model_device = param.device
+                break
+            for param_group in self.optimizer.param_groups:
+                if len(param_group["params"]) > 0:
+                    optimizer_device = param_group["params"][0].device
+                    break
+            if model_device != optimizer_device:
+                raise ValueError(
+                    "The model and the optimizer parameters are not on the same device, which probably means you"
+                    " created an optimizer around your model **before** putting on the device and passing it to the"
+                    " `Trainer`. Make sure the lines `import torch_xla.core.xla_model as xm` and"
+                    " `model.to(xm.xla_device())` is performed before the optimizer creation in your script."
+                )
+        if (self.is_deepspeed_enabled or self.is_fsdp_xla_enabled or self.is_fsdp_enabled) and (
             self.optimizer is not None or self.lr_scheduler is not None
         ):
             raise RuntimeError(
                 "Passing `optimizers` is not allowed if Deepspeed or PyTorch FSDP is enabled. "
                 "You should subclass `Trainer` and override the `create_optimizer_and_scheduler` method."
             )
-        
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
             callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
         )
+        self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
 
-        self._loggers_enabled = False
+        # Will be set to True by `self._setup_loggers()` on first call to `self.log()`.
+        self._loggers_initialized = False
+
+        # Create distant repo and output directory if needed
+        self.hub_model_id = None
+        if self.args.push_to_hub:
+            self.init_hf_repo()
+        if self.args.should_save:
+            os.makedirs(self.args.output_dir, exist_ok=True)
         
         if args.max_steps > 0:
             logger.info("max_steps is given, it will override any value given in num_train_epochs")
 
+        # Mixed precision setup
+        self.use_apex = False
+        self.use_cpu_amp = False
+
+        # Mixed precision setup for SageMaker Model Parallel
+        if is_sagemaker_mp_enabled():
+            # BF16 + model parallelism in SageMaker: currently not supported, raise an error
+            if args.bf16:
+                raise ValueError("SageMaker Model Parallelism does not support BF16 yet. Please use FP16 instead ")
+
+            if IS_SAGEMAKER_MP_POST_1_10:
+                # When there's mismatch between SMP config and trainer argument, use SMP config as truth
+                if args.fp16 != smp.state.cfg.fp16:
+                    logger.warning(
+                        f"FP16 provided in SM_HP_MP_PARAMETERS is {smp.state.cfg.fp16}, "
+                        f"but FP16 provided in trainer argument is {args.fp16}, "
+                        f"setting to {smp.state.cfg.fp16}"
+                    )
+                    args.fp16 = smp.state.cfg.fp16
+            else:
+                # smp < 1.10 does not support fp16 in trainer.
+                if hasattr(smp.state.cfg, "fp16"):
+                    logger.warning(
+                        f"FP16 provided in SM_HP_MP_PARAMETERS is {smp.state.cfg.fp16}, "
+                        "but SageMaker Model Parallelism < 1.10 does not support FP16 in trainer."
+                    )
         if (args.fp16 or args.bf16) and args.half_precision_backend == "auto":
             if args.device == torch.device("cpu"):
                 if args.fp16:
@@ -149,6 +295,19 @@ class _ModelHandler:
                     args.half_precision_backend = "cpu_amp"
             logger.info(f"Using {args.half_precision_backend} half precision backend")
 
+        if (args.fp16 or args.bf16) and not (self.is_deepspeed_enabled or is_sagemaker_mp_enabled()):
+            # deepspeed and SageMaker Model Parallel manage their own half precision
+            if args.half_precision_backend == "cpu_amp":
+                self.use_cpu_amp = True
+                self.amp_dtype = torch.bfloat16
+            elif args.half_precision_backend == "apex":
+                if not is_apex_available():
+                    raise ImportError(
+                        "Using FP16 with APEX but APEX is not installed, please refer to"
+                        " https://www.github.com/nvidia/apex."
+                    )
+                self.use_apex = True
+
         self.state = TrainerState(
             is_local_process_zero=self.is_local_process_zero(),
             is_world_process_zero=self.is_world_process_zero(),
@@ -156,10 +315,13 @@ class _ModelHandler:
 
         self.control = TrainerControl()
         self.current_flos = 0
-        self.label_names = 'labels'
         self.can_return_loss = can_return_loss(self.model.__class__)
         self.control = self.callback_handler.on_init_end(self.args, self.state, self.control)
 
         # Internal variables to help with automatic batch size reduction
         self._train_batch_size = args.train_batch_size
         self._created_lr_scheduler = False
+
+        # torch.compile
+        if args.torch_compile and not is_torch_compile_available():
+            raise RuntimeError("Using torch.compile requires PyTorch 2.0 or higher.")
