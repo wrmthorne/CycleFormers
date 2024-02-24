@@ -1,9 +1,7 @@
-from cycleformers import CycleTrainer, CycleModel, ModelConfig, TrainerConfig
+from cycleformers import CycleTrainer, ModelTrainingArguments, TrainingArguments
 from datasets import load_dataset, DatasetDict
-from transformers import GenerationConfig
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from nltk.tokenize.treebank import TreebankWordDetokenizer
-
-
 
 # Dictionary mapping BIO tags to compound tags and then to word based tags
 tag_to_idx = {'O': 0, 'B-PER': 1, 'I-PER': 2, 'B-ORG': 3, 'I-ORG': 4, 'B-LOC': 5, 'I-LOC': 6, 'B-MISC': 7, 'I-MISC': 8}
@@ -65,57 +63,50 @@ def prepare_dataset():
 
 
 def main():
-    model_a_config = ModelConfig(
-        pretrained_model_name_or_path='google/flan-t5-small',
-        per_device_train_batch_size=2,
-        per_device_eval_batch_size=2,
-        generation_config=GenerationConfig(
-            max_new_tokens=50
-        )
-    )
+    model_A = AutoModelForSeq2SeqLM.from_pretrained('google/flan-t5-small')
+    model_B = AutoModelForSeq2SeqLM.from_pretrained('google/flan-t5-small')
 
-    model_b_config = ModelConfig(
-        pretrained_model_name_or_path='gpt2',
-        per_device_train_batch_size=2,
-        per_device_eval_batch_size=2,
-        padding_side='left',
-        generation_config=GenerationConfig(
-            max_new_tokens=50
-        )
-    )
-
-    model = CycleModel(model_a_config, model_b_config)
-
-    model.tokenizer_B.pad_token_id = model.tokenizer_B.eos_token_id
+    tokenizer = AutoTokenizer.from_pretrained('google/flan-t5-small')
     
     a_dataset, b_dataset = prepare_dataset()
     
     a_dataset = a_dataset.map(lambda example: {
-        **model.tokenizer_A(example['text']),
+        **tokenizer(example['text']),
     })
     a_dataset['validation'] = a_dataset['validation'].map(lambda example: {
-        'labels': model.tokenizer_A(example['label'])['input_ids'],
+        'labels': tokenizer(example['label'])['input_ids'],
     }, remove_columns=['label'])
     a_dataset = a_dataset.remove_columns('text')
 
 
     b_dataset = b_dataset.map(lambda example: {
-        **model.tokenizer_B(example['text'] + '\n' + example['label']),
+        **tokenizer(example['text']),
     })
-    b_dataset['validation']['labels'] = b_dataset['validation']['input_ids']
+    b_dataset['validation'] = b_dataset['validation'].map(lambda example: {
+        'labels': tokenizer(example['label'])['input_ids'],
+    }, remove_columns=['label'])
     b_dataset = b_dataset.remove_columns('text')
 
-    trainer_config = TrainerConfig(
-        log_every_n_steps=10,
+    trainer_config = TrainingArguments(
+        output_dir='./test',
+        logging_steps=1,
     )
 
     trainer = CycleTrainer(
-        model,
-        args=trainer_config,
-        train_dataset_A=a_dataset['train'],
-        train_dataset_B=b_dataset['train'],
-        eval_dataset_A=a_dataset['validation'],
-        eval_dataset_B=b_dataset['validation'],
+        models = {
+            'A': model_A,
+            'B': model_B,
+        },
+        tokenizers = tokenizer,
+        args = trainer_config,
+        train_datasets = {
+            'A': a_dataset['train'],
+            'B': b_dataset['train'],
+        },
+        eval_datasets = {
+            'A': a_dataset['validation'],
+            'B': b_dataset['validation'],
+        },
     )
 
     trainer.train()

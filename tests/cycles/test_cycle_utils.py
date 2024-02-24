@@ -3,11 +3,11 @@ import unittest
 
 from cycleformers.cycles.cycle_utils import CycleSequence
 
-def add_one(x):
-    return x + 1
+def add_one(**x):
+    return {k: v + 1 for k, v in x.items()}
 
-def multiply_two(x):
-    return x * 2
+def multiply_two(**x):
+    return {k: v * 2 for k, v in x.items()}
 
 
 class TestCycleSequence(unittest.TestCase):
@@ -32,8 +32,8 @@ class TestCycleSequence(unittest.TestCase):
 
     def test__call__(self):
         cycle_sequence = CycleSequence(add_one, multiply_two)
-        result = cycle_sequence(1)
-        self.assertEqual(result, 4)
+        result = cycle_sequence(**{'x': 1})
+        self.assertDictEqual(result, {'x': 4})
 
     def test__len__(self):
         cycle_sequence = CycleSequence(add_one, multiply_two)

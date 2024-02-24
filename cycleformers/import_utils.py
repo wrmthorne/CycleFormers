@@ -2,15 +2,15 @@ import importlib
 import os
 import yaml
 
-from transformers import GenerationConfig, TrainingArguments
+from transformers import GenerationConfig
 
-from .trainer import ModelConfig
+from .trainer import ModelTrainingArguments, TrainingArguments
 
 
 
 YAML_HEADERS_TO_CONFIG_CLASS_MAPPING = {
     'generation': GenerationConfig,
-    'model': ModelConfig,
+    'model': ModelTrainingArguments,
     'trainer': TrainingArguments,
 }
 

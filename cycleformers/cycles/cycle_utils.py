@@ -27,7 +27,7 @@ class CycleSequence:
                 self.add_method(str(idx), method)
 
     def __call__(self, **inputs):
-        for i, method in enumerate(self._methods.values()):
+        for method in self._methods.values():
             inputs = method(**inputs)
         return inputs
     

@@ -5,7 +5,7 @@ import torch
 from transformers import AutoTokenizer
 
 from cycleformers.core import seed_everything
-from cycleformers.trainer.new_trainer import CycleTrainer
+from cycleformers.trainer import CycleTrainer, ModelTrainingArguments, TrainingArguments
 from ..testing_utils import (
     BaseModel,
     BaseModelWithHead,
@@ -28,6 +28,7 @@ class DummyDataset(torch.utils.data.Dataset):
 
 class CycleTrainerTester(unittest.TestCase):
 
+    @classmethod
     def setUpClass(cls):
         seed_everything(42)
 

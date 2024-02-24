@@ -2,7 +2,7 @@ import unittest
 
 from transformers import TrainingArguments as HFTrainingArguments
 
-from cycleformers.trainer.trainer_args import ModelTrainingArguments, TrainingArguments
+from cycleformers.trainer.training_args import ModelTrainingArguments, TrainingArguments
 
 
 class TestTrainingArguments(unittest.TestCase):
@@ -11,3 +11,6 @@ class TestTrainingArguments(unittest.TestCase):
         my_args = TrainingArguments(output_dir='./test')
 
         self.assertDictEqual(hf_args.to_dict(), my_args.to_dict())
+
+
+# TODO: Add tests for ModelTrainingArguments
