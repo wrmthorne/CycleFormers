@@ -58,20 +58,24 @@ else:
 logger = logging.get_logger(__name__)
 
 
-class _ModelHandler:
+class _ModelHandler(Trainer):
     '''
     Class to hold model, tokenizer, optimizer and scheduler and model specific training arguments
     in one place to make it easier to pass around. This class is not meant to be used directly.
     '''
-    add_callback = Trainer.add_callback
-    call_model_init = Trainer.call_model_init
-    create_optimiser_and_scheduler = Trainer.create_optimizer_and_scheduler
-    create_accelerator_and_postprocess = Trainer.create_accelerator_and_postprocess
-    is_local_process_zero = Trainer.is_local_process_zero
-    is_world_process_zero = Trainer.is_world_process_zero
-    _move_model_to_device = Trainer._move_model_to_device
-    pop_callback = Trainer.pop_callback
-    remove_callback = Trainer.remove_callback
+    # add_callback = Trainer.add_callback
+    # call_model_init = Trainer.call_model_init
+    # create_accelerator_and_postprocess = Trainer.create_accelerator_and_postprocess
+    # create_optimizer = Trainer.create_optimizer
+    # create_optimizer_and_scheduler = Trainer.create_optimizer_and_scheduler
+    # create_scheduler = Trainer.create_scheduler
+    # is_local_process_zero = Trainer.is_local_process_zero
+    # is_world_process_zero = Trainer.is_world_process_zero
+    # _move_model_to_device = Trainer._move_model_to_device
+    # pop_callback = Trainer.pop_callback
+    # _prepare_inputs = Trainer._prepare_inputs
+    # remove_callback = Trainer.remove_callback
+    # compute_loss_context_manager = Trainer.compute_loss_context_manager
 
     def __init__(
         self,
@@ -325,3 +329,18 @@ class _ModelHandler:
         # torch.compile
         if args.torch_compile and not is_torch_compile_available():
             raise RuntimeError("Using torch.compile requires PyTorch 2.0 or higher.")
+
+    # TEMP METHOD TO TEST TRAINER
+    def _prepare_inputs(self, inputs):
+        """
+        Prepare `inputs` before feeding them to the model, converting them to tensors if they are not already and
+        handling potential state.
+        """
+        inputs = self._prepare_input(inputs)
+        if len(inputs) == 0:
+            raise ValueError(
+                "The batch received was empty, your model won't be able to train on it. Double-check that your "
+                f"training dataset contains keys expected by the model: {','.join(self._signature_columns)}."
+            )
+
+        return inputs
