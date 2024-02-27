@@ -123,30 +123,3 @@ class CycleSequence:
                 self.add_method(name, method)
         else:
             self.append(method)
-
-
-# TODO: Add support for multi-adapter
-def init_cycle(gen_model, gen_tokenizer, gen_model_generation_config, train_model, train_tokenizer):
-    gen_cycle = Seq2SeqCycle if gen_model.config.is_encoder_decoder else CausalCycle
-    train_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
-
-    skip_reencode = gen_tokenizer.get_vocab() == train_tokenizer.get_vocab() and type(gen_tokenizer) == type(train_tokenizer)
-
-    cycle_stages = CycleSequence(OrderedDict({
-        'Generate Synthetic IDs': gen_cycle.generate(gen_model, gen_tokenizer, gen_model_generation_config),
-    }))
-
-    if not skip_reencode:
-        cycle_stages.extend(OrderedDict({
-            'Decode Synthetic IDs to Text': gen_cycle.decode(gen_tokenizer),
-            'Encode Synthetic Text to Train IDs': train_cycle.encode(train_tokenizer)
-        }))
-    else:
-        print('Skipping re-encoding')
-
-    cycle_stages.extend(OrderedDict({
-        'Format Synthetic Train IDs': train_cycle.format(train_model, train_tokenizer),
-        'Calculate Train Model Reconstruction Loss': train_cycle.train(train_model)
-    }))
-
-    return cycle_stages
