@@ -1,3 +1,4 @@
+import math
 import os
 import time
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -218,8 +219,7 @@ class MultiModelTrainer(Trainer):
         self.control = TrainerControl()
 
         self.current_flos = 0
-        self.control = self.callback_handler.on_init_end(self.args, self.state, self.control)
-        
+        self.control = self.callback_handler.on_init_end(self.args, self.state, self.control)      
 
         self._memory_tracker.stop_and_update_metrics()
             
@@ -360,11 +360,28 @@ class MultiModelTrainer(Trainer):
         steps_trained_in_current_epoch = 0
         steps_trained_progress_bar = None
 
+
+
         for handler in self.handlers.values():
+            handler.state.epoch = 0
+
             handler.callback_handler.model = handler.model
             handler.callback_handler.optimizer = handler.optimizer
             handler.callback_handler.lr_scheduler = handler.lr_scheduler
             handler.callback_handler.train_dataloader = train_dataloader
+
+            len_dataloader = len(train_dataloader)
+            num_update_steps_per_epoch = len_dataloader // handler.args.gradient_accumulation_steps
+
+            # Properly handle max_steps calculation
+            if handler.args.max_steps > 0:
+                handler.max_steps = handler.args.max_steps
+                handler.num_train_epochs = handler.args.max_steps // num_update_steps_per_epoch + int(
+                    args.max_steps % num_update_steps_per_epoch > 0
+                )
+            else:
+                handler.max_steps = math.ceil(handler.args.num_train_epochs * num_update_steps_per_epoch)
+                handler.num_train_epochs = math.ceil(handler.args.num_train_epochs)
 
             handler.state.max_steps = handler.args.max_steps
             handler.state.num_train_epochs = handler.args.num_train_epochs
@@ -381,7 +398,7 @@ class MultiModelTrainer(Trainer):
 
         self._globalstep_last_logged = self.state.global_step
 
-        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+        # self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         total_batched_samples = 0
         # TODO: Handle variable number of epochs between models
@@ -395,6 +412,10 @@ class MultiModelTrainer(Trainer):
                 total_batched_samples += 1
 
                 for name, handler in self.handlers.items():
+                    is_last_step_and_steps_less_than_grad_acc = (
+                        steps_in_epoch <= handler.args.gradient_accumulation_steps and (step + 1) == steps_in_epoch
+                    )
+                    
                     if step % handler.args.gradient_accumulation_steps == 0:
                         handler.control = handler.callback_handler.on_step_begin(handler.args, handler.state, handler.control)
 
