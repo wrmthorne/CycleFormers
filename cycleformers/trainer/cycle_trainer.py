@@ -1,23 +1,37 @@
 from collections import OrderedDict
+from typing import Callable, Dict, List, Optional, Tuple, Union
+
+from datasets import Dataset
+import torch
+import torch.nn as nn
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LambdaLR
+from transformers import DataCollator, EvalPrediction, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
+from transformers.utils.import_utils import is_peft_available
 
 from cycleformers.cycles import CausalCycle, Seq2SeqCycle, CycleSequence
 from .multi_model_trainer import MultiModelTrainer
+from .training_args import TrainingArguments, ModelTrainingArguments
+
+if is_peft_available():
+    from peft import PeftModel
+
 
 class CycleTrainer(MultiModelTrainer):
     def __init__(
         self,
-        models,
-        tokenizers,
-        args,
-        model_args,
-        data_collators,
-        train_datasets,
-        eval_datasets,
-        model_init,
-        compute_metrics,
-        callbacks,
-        optimizers,
-        preprocess_logits_for_metrics,
+        models: Union[Dict[str, Union[PreTrainedModel, nn.Module]], 'PeftModel'],
+        tokenizers: Union[Dict[str, PreTrainedTokenizerBase], PreTrainedTokenizerBase],
+        args: Optional[TrainingArguments] = None,
+        model_args: Optional[Union[Dict[str, ModelTrainingArguments], ModelTrainingArguments]] = dict(),
+        data_collators: Optional[Union[Dict[str, DataCollator], DataCollator]] = dict(),
+        train_datasets: Optional[Dict[str, Dataset]] = dict(),
+        eval_datasets: Optional[Dict[str, Dataset]] = None,
+        model_init: Optional[Dict[str, Callable[[], PreTrainedModel]]] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        callbacks: Optional[Union[Dict[str, List[TrainerCallback]], List[TrainerCallback]]] = None,
+        optimizers: Optional[Dict[str, Tuple[Optimizer, LambdaLR]]] = dict(),
+        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> None:
         super().__init__(
             models=models,
