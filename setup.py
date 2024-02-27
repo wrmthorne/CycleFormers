@@ -4,9 +4,10 @@ from setuptools import find_packages, setup
 __version__ = '0.0.0.dev0'
 
 REQUIRED_PKGS = [
-    'transformers>=4.31.0',
+    'accelerate>=0.21.0',
+    'datasets',
     'torch>=1.4.0',
-    'datasets'
+    'transformers>=4.31.0',
 ]
 
 EXTRAS = {
