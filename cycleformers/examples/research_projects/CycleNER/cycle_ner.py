@@ -90,6 +90,7 @@ def main():
     trainer_config = TrainingArguments(
         output_dir='./test',
         logging_steps=1,
+        per_device_train_batch_size=1,
     )
 
     trainer = CycleTrainer(

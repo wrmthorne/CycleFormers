@@ -4,10 +4,10 @@ from setuptools import find_packages, setup
 __version__ = '0.0.0.dev0'
 
 REQUIRED_PKGS = [
-    'accelerate>=0.21.0',
+    'accelerate==0.27.2',
     'datasets',
     'torch>=1.4.0',
-    'transformers>=4.31.0',
+    'transformers==4.38.1', # Currently only compatible with this version
 ]
 
 EXTRAS = {
@@ -27,7 +27,7 @@ setup(
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.10',
     ],
-    url='UPDATE GITHUB URL',
+    url='https://github.com/wrmthorne/CycleFormers/',
     packages=find_packages(),
     include_package_data=True,
     install_requires=REQUIRED_PKGS,

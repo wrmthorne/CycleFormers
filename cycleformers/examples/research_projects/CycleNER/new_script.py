@@ -61,12 +61,14 @@ def prepare_dataset():
     
     return a_dataset, b_dataset
 
-
+# google/flan-t5-small
 def main():
-    model_A = AutoModelForSeq2SeqLM.from_pretrained('google/flan-t5-small')
-    model_B = AutoModelForSeq2SeqLM.from_pretrained('google/flan-t5-small')
+    model_name_or_path = 'mesolitica/t5-tiny-standard-bahasa-cased'
+    # model_name_or_path = 'google/flan-t5-small'
+    model_A = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
+    model_B = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
 
-    tokenizer = AutoTokenizer.from_pretrained('google/flan-t5-small')
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     
     a_dataset, b_dataset = prepare_dataset()
     
@@ -90,6 +92,8 @@ def main():
     trainer_config = TrainingArguments(
         output_dir='./test',
         logging_steps=1,
+        per_device_train_batch_size=1,
+        report_to='wandb',
     )
 
     trainer = CycleTrainer(

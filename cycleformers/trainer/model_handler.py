@@ -54,6 +54,12 @@ if is_sagemaker_mp_enabled():
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
+if is_torch_tpu_available(check_device=False):
+    import torch_xla.core.xla_model as xm
+    import torch_xla.debug.metrics as met
+    import torch_xla.distributed.spmd as xs
+    import torch_xla.runtime as xr
+
 
 logger = logging.get_logger(__name__)
 
@@ -63,20 +69,6 @@ class _ModelHandler(Trainer):
     Class to hold model, tokenizer, optimizer and scheduler and model specific training arguments
     in one place to make it easier to pass around. This class is not meant to be used directly.
     '''
-    # add_callback = Trainer.add_callback
-    # call_model_init = Trainer.call_model_init
-    # create_accelerator_and_postprocess = Trainer.create_accelerator_and_postprocess
-    # create_optimizer = Trainer.create_optimizer
-    # create_optimizer_and_scheduler = Trainer.create_optimizer_and_scheduler
-    # create_scheduler = Trainer.create_scheduler
-    # is_local_process_zero = Trainer.is_local_process_zero
-    # is_world_process_zero = Trainer.is_world_process_zero
-    # _move_model_to_device = Trainer._move_model_to_device
-    # pop_callback = Trainer.pop_callback
-    # _prepare_inputs = Trainer._prepare_inputs
-    # remove_callback = Trainer.remove_callback
-    # compute_loss_context_manager = Trainer.compute_loss_context_manager
-
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
@@ -344,3 +336,70 @@ class _ModelHandler(Trainer):
             )
 
         return inputs
+    
+    def train(self, **kwargs):
+        raise NotImplementedError(
+            'train should not be called on a model handler. This should be implemented in the '
+            'calling Trainer class.'
+        )
+    
+    def _inner_training_loop(self, **kwargs):
+        raise NotImplementedError(
+            '_inner_training_loop should not be called on a model handler. This should be implemented '
+            'in the calling Trainer class.'
+        )
+    
+    def training_step(self, **kwargs):
+        raise NotImplementedError(
+            'training_step should not be called on a model handler. This should be implemented in the '
+            'calling Trainer class.'
+        )
+    
+    def compute_loss(self, **kwargs):
+        raise NotImplementedError(
+            'compute_loss should not be called on a model handler. This should be implemented in the '
+            'calling Trainer class.'
+        )
+    
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval):
+        if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
+            if is_torch_tpu_available():
+                xm.mark_step()
+
+            logs: Dict[str, float] = {}
+
+            # all_gather + mean() to get average loss over all processes
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            if grad_norm is not None:
+                logs["grad_norm"] = grad_norm
+            logs["learning_rate"] = self._get_learning_rate()
+
+            # Rename keys so that logging records each model logs separately
+            logs = {f'{self._name}_{key}': value for key, value in logs.items()}
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+
+            self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self.evaluate(ignore_keys=ignore_keys_for_eval)
+            self._report_to_hp_search(trial, self.state.global_step, metrics)
+
+            # Run delayed LR scheduler now that metrics are populated
+            if isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                metric_to_check = self.args.metric_for_best_model
+                if not metric_to_check.startswith("eval_"):
+                    metric_to_check = f"eval_{metric_to_check}"
+                self.lr_scheduler.step(metrics[metric_to_check])
+
+        if self.control.should_save:
+            self._save_checkpoint(model, trial, metrics=metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)

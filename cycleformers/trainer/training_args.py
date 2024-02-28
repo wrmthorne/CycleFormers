@@ -2157,6 +2157,8 @@ class LoggingArgsMixin(Base):
         if self.disable_tqdm is None:
             self.disable_tqdm = logger.getEffectiveLevel() > logging.WARN
 
+        self.logging_strategy = IntervalStrategy(self.logging_strategy)
+
         if self.evaluation_strategy == IntervalStrategy.STEPS and (self.eval_steps is None or self.eval_steps == 0):
             if self.logging_steps > 0:
                 logger.info(f"using `logging_steps` to initialize `eval_steps` to {self.logging_steps}")

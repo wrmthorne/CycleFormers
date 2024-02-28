@@ -123,6 +123,8 @@ class Seq2SeqCycle:
                     generation_config=generation_config,
                 )
 
+                print(tokenizer.batch_decode(output_ids, skip_special_tokens=True))
+
             return inputs | {'labels': output_ids}
         
         return seq2seq_generate

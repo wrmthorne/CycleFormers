@@ -1,5 +1,6 @@
 import math
 import os
+import sys
 import time
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -34,9 +35,12 @@ from transformers.trainer_utils import (
 )
 from transformers.utils import logging
 from transformers.utils.import_utils import (
+    is_accelerate_available,
+    is_apex_available,
     is_in_notebook,
     is_peft_available,
-    is_sagemaker_mp_enabled
+    is_sagemaker_mp_enabled,
+    is_torch_tpu_available,
 )
 
 from cycleformers.data import CombinedLoader
@@ -52,6 +56,14 @@ if is_in_notebook():
     from transformers.utils.notebook import NotebookProgressCallback
 
     DEFAULT_PROGRESS_CALLBACK = NotebookProgressCallback
+
+if is_accelerate_available():
+    from accelerate.utils import (
+        DistributedType,
+    )
+
+if is_apex_available():
+    from apex import amp
 
 if is_peft_available():
     from peft import PeftModel
@@ -150,7 +162,7 @@ class MultiModelTrainer(Trainer):
                 models[name],
                 model_args.get(name, ModelTrainingArguments(
                     output_dir=os.path.join(args.output_dir, name)
-                ).update_from_global_args(args)),
+                )).update_from_global_args(args),
                 tokenizers[name],
                 model_init=model_init.get(name, None),
                 compute_metrics=compute_metrics.get(name, None),
@@ -159,6 +171,9 @@ class MultiModelTrainer(Trainer):
                 preprocess_logits_for_metrics=preprocess_logits_for_metrics.get(name, None),
             ) for name in self._model_names
         }
+
+        for name, handler in self.handlers.items():
+            handler._name = name
 
         # Create collators for any datasets that don't have one based on the model with the same name
         for name in train_datasets:
@@ -326,12 +341,41 @@ class MultiModelTrainer(Trainer):
 
         train_dataloader = iter(self.get_train_dataloader()) # TODO: Fix this stupid need to call iter
 
-        len_dataloader = None
+        len_dataloader = len(train_dataloader) if has_length(train_dataloader) else None
         num_train_tokens = None
-        if has_length(train_dataloader):
-            num_examples = self.num_examples(train_dataloader)
-        
-        for handler in self.handlers.values():
+
+        for name, handler in self.handlers.items():
+            handler.total_train_batch_size = handler.args.per_device_train_batch_size * handler.args.gradient_accumulation_steps * handler.args.world_size
+
+            # TODO: Properly handle max_steps calculation per dataset
+            if len_dataloader is not None:
+                handler.num_update_steps_per_epoch = len_dataloader // handler.args.gradient_accumulation_steps
+                handler.num_update_steps_per_epoch = max(handler.num_update_steps_per_epoch, 1)
+
+                if handler.args.max_steps > 0:
+                    handler.max_steps = handler.args.max_steps
+                    handler.num_train_epochs = handler.args.max_steps // handler.num_update_steps_per_epoch + int(
+                        args.max_steps % handler.num_update_steps_per_epoch > 0
+                    )
+                    handler.num_train_samples = handler.max_steps * handler.total_train_batch_size
+                    # TODO: Implement tokens per second calculation
+
+                else:
+                    handler.max_steps = math.ceil(handler.args.num_train_epochs * handler.num_update_steps_per_epoch)
+                    handler.num_train_epochs = math.ceil(handler.args.num_train_epochs)
+                    handler.num_train_samples = self.num_examples(train_dataloader) * handler.args.num_train_epochs
+            elif handler.args.max_steps > 0:
+                handler.max_steps = handler.args.max_steps
+                handler.num_train_epochs = sys.maxsize
+                handler.num_updates_per_epoch = handler.max_steps
+                handler.num_train_samples = handler.max_steps * handler.total_train_batch_size
+                # TODO: Implement tokens per second calculation
+            else:
+                raise ValueError(
+                    "args.max_steps must be set to a positive value if dataloader does not have a length, was"
+                    f" {handler.args.max_steps} for model {name}"
+                )
+            
             handler.delay_optimizer_creation = is_sagemaker_mp_enabled() or handler.is_fsdp_xla_enabled or handler.is_fsdp_enabled
 
             if handler._created_lr_scheduler:
@@ -339,52 +383,81 @@ class MultiModelTrainer(Trainer):
                 handler._created_lr_scheduler = False
 
             if handler.is_deepspeed_enabled:
-                handler.optimizer, handler.lr_scheduler = deepspeed_init(handler, num_training_steps=handler.args.max_steps)
+                handler.optimizer, handler.lr_scheduler = deepspeed_init(handler, num_training_steps=handler.max_steps)
 
             if not handler.delay_optimizer_creation:
-                handler.create_optimizer_and_scheduler(num_training_steps=handler.args.max_steps)
+                handler.create_optimizer_and_scheduler(num_training_steps=handler.max_steps)
 
-        self.state = TrainerState() # TODO: How to handle state for multiple sub models?
+            handler.state = TrainerState()
 
-        for handler in self.handlers.values():
+            handler.state.train_batch_size = handler.args.per_device_train_batch_size
+
+            handler.state.max_steps = handler.max_steps
+            handler.state.num_train_epochs = handler.num_train_epochs
+
+            if handler.args.logging_steps is not None:
+                if handler.args.logging_steps < 1:
+                    handler.state.logging_steps = math.ceil(handler.max_steps * handler.args.logging_steps)
+                else:
+                    handler.state.logging_steps = handler.args.logging_steps
+            if handler.args.eval_steps is not None:
+                if handler.args.eval_steps < 1:
+                    handler.state.eval_steps = math.ceil(handler.max_steps * handler.args.eval_steps)
+                else:
+                    handler.state.eval_steps = handler.args.eval_steps
+            if handler.args.save_steps is not None:
+                if handler.args.save_steps < 1:
+                    handler.state.save_steps = math.ceil(handler.max_steps * handler.args.save_steps)
+                else:
+                    handler.state.save_steps = handler.args.save_steps
+
+            # Activate gradient checkpointing if needed
+            if handler.args.gradient_checkpointing:
+                if handler.args.gradient_checkpointing_kwargs is None:
+                    handler.gradient_checkpointing_kwargs = {}
+                else:
+                    handler.gradient_checkpointing_kwargs = handler.args.gradient_checkpointing_kwargs
+
+                handler.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=handler.gradient_checkpointing_kwargs)
+
+            handler._model = handler._wrap_model(handler.model_wrapped)
+
+            handler.use_accelerator_prepare = True if handler._model is handler.model else False
+
             if handler.delay_optimizer_creation:
-                handler.create_optimizer_and_scheduler(num_training_steps=handler.args.max_steps)
+                if handler.use_accelerator_prepare:
+                    handler.model = handler.accelerator.prepare(handler.model)
+                handler.create_optimizer_and_scheduler(num_training_steps=handler.max_steps)
 
-        # Train!
-        logger.info('***** Running training *****')
-        logger.info(f'  Num examples = {num_examples:,}')
+            if handler.use_accelerator_prepare:
+                handler.model.train()
+                if hasattr(handler.lr_scheduler, "step"):
+                    if handler.use_apex:
+                        handler._model = handler.accelerator.prepare(self.model)
+                    else:
+                        handler._model, handler.optimizer = handler.accelerator.prepare(handler.model, handler.optimizer)
+                else:
+                    # to handle cases wherein we pass "DummyScheduler" such as when it is specified in DeepSpeed config.
+                    handler._model, handler.optimizer, handler.lr_scheduler = handler.accelerator.prepare(
+                        handler.model, handler.optimizer, handler.lr_scheduler
+                    )
 
-        self.state.epoch = 0
-        start_time = time.time()
-        epochs_trained = 0
-        steps_trained_in_current_epoch = 0
-        steps_trained_progress_bar = None
+            if handler.is_fsdp_enabled:
+                handler.model = handler.model_wrapped = handler._model
 
+            if handler._model is not handler.model:
+                handler.model_wrapped = handler._model
 
+            if handler.is_deepspeed_enabled:
+                handler.deepspeed = handler.model_wrapped
 
-        for handler in self.handlers.values():
             handler.state.epoch = 0
 
-            handler.callback_handler.model = handler.model
+            handler.callback_handler.model = handler._model
             handler.callback_handler.optimizer = handler.optimizer
             handler.callback_handler.lr_scheduler = handler.lr_scheduler
             handler.callback_handler.train_dataloader = train_dataloader
 
-            len_dataloader = len(train_dataloader)
-            num_update_steps_per_epoch = len_dataloader // handler.args.gradient_accumulation_steps
-
-            # Properly handle max_steps calculation
-            if handler.args.max_steps > 0:
-                handler.max_steps = handler.args.max_steps
-                handler.num_train_epochs = handler.args.max_steps // num_update_steps_per_epoch + int(
-                    args.max_steps % num_update_steps_per_epoch > 0
-                )
-            else:
-                handler.max_steps = math.ceil(handler.args.num_train_epochs * num_update_steps_per_epoch)
-                handler.num_train_epochs = math.ceil(handler.args.num_train_epochs)
-
-            handler.state.max_steps = handler.args.max_steps
-            handler.state.num_train_epochs = handler.args.num_train_epochs
             handler.state.is_local_process_zero = handler.is_local_process_zero()
             handler.state.is_world_process_zero = handler.is_world_process_zero()
 
@@ -396,16 +469,33 @@ class MultiModelTrainer(Trainer):
 
             handler.control = handler.callback_handler.on_train_begin(handler.args, handler.state, handler.control)
 
-        self._globalstep_last_logged = self.state.global_step
+        # Train!
+        logger.info('***** Running training *****')
+        # logger.info(f'  Num examples = {num_examples:,}')
 
-        # self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+        self.state.epoch = 0
+        start_time = time.time()
+        epochs_trained = 0
+        steps_trained_in_current_epoch = 0
+        steps_trained_progress_bar = None
+
+
+        self._globalstep_last_logged = self.state.global_step
 
         total_batched_samples = 0
         # TODO: Handle variable number of epochs between models
         for epoch in range(int(max(handler.args.num_train_epochs for handler in self.handlers.values()))):
             epoch_iterator = train_dataloader
 
-            steps_in_epoch = len(epoch_iterator)
+            for handler in self.handlers.values():
+                handler.control = handler.callback_handler.on_epoch_begin(handler.args, handler.state, handler.control)
+
+                # TODO: Update to respoect varying sizes of datasets
+                handler.steps_in_epoch = (
+                    len(epoch_iterator)
+                    if len_dataloader is not None
+                    else self.args.max_steps * self.args.gradient_accumulation_steps
+                )
 
             step = -1
             for step, inputs in enumerate(epoch_iterator):
@@ -413,7 +503,7 @@ class MultiModelTrainer(Trainer):
 
                 for name, handler in self.handlers.items():
                     is_last_step_and_steps_less_than_grad_acc = (
-                        steps_in_epoch <= handler.args.gradient_accumulation_steps and (step + 1) == steps_in_epoch
+                        handler.steps_in_epoch <= handler.args.gradient_accumulation_steps and (step + 1) == handler.steps_in_epoch
                     )
                     
                     if step % handler.args.gradient_accumulation_steps == 0:
@@ -422,9 +512,54 @@ class MultiModelTrainer(Trainer):
                     if inputs[name]:
                         with handler.accelerator.accumulate(handler.model):
                             handler.tr_loss_step = self.training_step(handler, inputs[name], self.handlers)
-                            print(f'Model {name} loss: {handler.tr_loss_step}')
 
-                    if total_batched_samples % handler.args.gradient_accumulation_steps == 0:
+                    if (
+                        handler.args.logging_nan_inf_filter
+                        and not is_torch_tpu_available()
+                        and torch.isnan(handler.tr_loss_step) or torch.isinf(handler.tr_loss_step)
+                    ):
+                        handler.tr_loss = handler.tr_loss / (1 + handler.state.global_step - handler._globalstep_last_logged)
+                    else:
+                        handler.tr_loss += handler.tr_loss_step
+
+                    handler.current_flos += float(handler.floating_point_ops(inputs[name]))
+
+                    is_last_step_and_steps_less_than_grad_acc = (
+                        handler.steps_in_epoch <= handler.args.gradient_accumulation_steps and (step + 1) == handler.steps_in_epoch
+                    )
+
+                    if (
+                        total_batched_samples % handler.args.gradient_accumulation_steps == 0
+                        or is_last_step_and_steps_less_than_grad_acc
+                    ):
+                        if is_last_step_and_steps_less_than_grad_acc:
+                            handler.accelerator.gradient_state._set_sync_gradients(True)
+
+                        if handler.args.max_grad_norm is not None and handler.args.max_grad_norm > 0:
+                            # deepspeed does its own clipping
+
+                            if is_sagemaker_mp_enabled() and handler.args.fp16:
+                                _grad_norm = handler.optimizer.clip_master_grads(handler.args.max_grad_norm)
+                            elif handler.use_apex:
+                                # Revert to normal clipping otherwise, handling Apex or full precision
+                                _grad_norm = nn.utils.clip_grad_norm_(
+                                    amp.master_params(handler.optimizer),
+                                    handler.args.max_grad_norm,
+                                )
+                            else:
+                                _grad_norm = handler.accelerator.clip_grad_norm_(
+                                    handler.model.parameters(),
+                                    handler.args.max_grad_norm,
+                                )
+
+                            if (
+                                is_accelerate_available()
+                                and handler.accelerator.distributed_type == DistributedType.DEEPSPEED
+                            ):
+                                handler.grad_norm = handler.model.get_global_grad_norm()
+                            else:
+                                handler.grad_norm = _grad_norm.item() if _grad_norm is not None else None
+
                         handler.optimizer.step()
                         handler.optimizer_was_run = not handler.accelerator.optimizer_step_was_skipped
                         if handler.optimizer_was_run:
@@ -433,11 +568,18 @@ class MultiModelTrainer(Trainer):
                                 handler.lr_scheduler.step()
 
                         handler.model.zero_grad()
+                        handler.state.global_step += 1
+                        handler.state.epoch = epoch + (step + 1) / handler.steps_in_epoch
                         handler.control = handler.callback_handler.on_step_end(handler.args, handler.state, handler.control)
-                        print(f'Optimised model: {name}')
+
+                        # TODO: Need to fix trial and ignore_keys_for_eval
+                        handler._maybe_log_save_evaluate(handler.tr_loss, handler.grad_norm, handler.model, None, epoch, None)
                     else:
                         handler.control = handler.callback_handler.on_substep_end(handler.args, handler.state, handler.control)
                         
+                for handler in self.handlers.values():
+                    handler.control = handler.callback_handler.on_epoch_end(handler.args, handler.state, handler.control)
+                    handler._maybe_log_save_evaluate(handler.tr_loss, handler.grad_norm, handler.model, None, epoch, None)
                         
 
         
