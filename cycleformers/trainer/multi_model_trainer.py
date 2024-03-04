@@ -356,6 +356,8 @@ class MultiModelTrainer(Trainer):
         num_train_tokens = None
 
         for name, handler in self.handlers.items():
+            handler.grad_norm = None
+
             handler.total_train_batch_size = handler.args.per_device_train_batch_size * handler.args.gradient_accumulation_steps * handler.args.world_size
 
             # TODO: Properly handle max_steps calculation per dataset

@@ -55,7 +55,7 @@ class CycleTrainer(MultiModelTrainer):
             raise ValueError("CycleTrainer only supports two models")
         
     # TODO: Add support for multi-adapter
-    def init_cycle(self, gen_model, gen_tokenizer, gen_model_generation_config, train_model, train_tokenizer):
+    def init_cycle(self, gen_model, gen_tokenizer, gen_model_generation_config, train_model, train_tokenizer, train_collator):
         gen_cycle = Seq2SeqCycle if gen_model.config.is_encoder_decoder else CausalCycle
         train_cycle = Seq2SeqCycle if train_model.config.is_encoder_decoder else CausalCycle
 
@@ -70,11 +70,9 @@ class CycleTrainer(MultiModelTrainer):
                 'Decode Synthetic IDs to Text': gen_cycle.decode(gen_tokenizer),
                 'Encode Synthetic Text to Train IDs': train_cycle.encode(train_tokenizer)
             }))
-        else:
-            print('Skipping re-encoding')
 
         cycle_stages.extend(OrderedDict({
-            'Format Synthetic Train IDs': train_cycle.format(train_model, train_tokenizer),
+            'Format Synthetic Train IDs': train_cycle.format(train_model, train_tokenizer, train_collator),
             'Calculate Train Model Reconstruction Loss': train_cycle.train(train_model)
         }))
 
@@ -93,6 +91,7 @@ class CycleTrainer(MultiModelTrainer):
                 gen_model_generation_config={},
                 train_model=curr_handler._model,
                 train_tokenizer=curr_handler.tokenizer,
+                train_collator=self.data_collators[curr_handler._name]
             )
 
             print(curr_handler.cycle)

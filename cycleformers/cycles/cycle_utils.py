@@ -86,7 +86,7 @@ class CycleSequence:
     def __repr__(self) -> str:
         text = self.__class__.__name__ + '\n'
         for i, (name, method) in enumerate(self._methods.items()):
-            text += f'\n\t({i}): {name} -> {method}'
+            text += f'({i}): {name} -> \n\t{method}\n'
         return text
     
     def add_method(self, name: str, method: Callable) -> None:
