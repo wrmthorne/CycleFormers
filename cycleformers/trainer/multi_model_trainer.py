@@ -5,6 +5,7 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from datasets import Dataset
+from packaging import version
 import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
@@ -67,6 +68,16 @@ if is_apex_available():
 
 if is_peft_available():
     from peft import PeftModel
+
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+    from smdistributed.modelparallel import __version__ as SMP_VERSION
+
+    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
+
+    from transformers.trainer_pt_utils import smp_forward_backward
+else:
+    IS_SAGEMAKER_MP_POST_1_10 = False
 
 
 logger = logging.get_logger(__name__)
@@ -479,7 +490,6 @@ class MultiModelTrainer(Trainer):
         steps_trained_in_current_epoch = 0
         steps_trained_progress_bar = None
 
-
         self._globalstep_last_logged = self.state.global_step
 
         total_batched_samples = 0
@@ -510,7 +520,7 @@ class MultiModelTrainer(Trainer):
                         handler.control = handler.callback_handler.on_step_begin(handler.args, handler.state, handler.control)
 
                     if inputs[name]:
-                        with handler.accelerator.accumulate(handler.model):
+                        with handler.accelerator.accumulate(handler._model):
                             handler.tr_loss_step = self.training_step(handler, inputs[name], self.handlers)
 
                     if (
@@ -556,7 +566,7 @@ class MultiModelTrainer(Trainer):
                                 is_accelerate_available()
                                 and handler.accelerator.distributed_type == DistributedType.DEEPSPEED
                             ):
-                                handler.grad_norm = handler.model.get_global_grad_norm()
+                                handler.grad_norm = handler._model.get_global_grad_norm()
                             else:
                                 handler.grad_norm = _grad_norm.item() if _grad_norm is not None else None
 
@@ -567,21 +577,21 @@ class MultiModelTrainer(Trainer):
                             if not isinstance(handler.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                                 handler.lr_scheduler.step()
 
-                        handler.model.zero_grad()
+                        handler._model.zero_grad()
                         handler.state.global_step += 1
                         handler.state.epoch = epoch + (step + 1) / handler.steps_in_epoch
                         handler.control = handler.callback_handler.on_step_end(handler.args, handler.state, handler.control)
 
                         # TODO: Need to fix trial and ignore_keys_for_eval
-                        handler._maybe_log_save_evaluate(handler.tr_loss, handler.grad_norm, handler.model, None, epoch, None)
+                        handler._maybe_log_save_evaluate(handler.tr_loss, handler.grad_norm, handler._model, None, epoch, None)
                     else:
                         handler.control = handler.callback_handler.on_substep_end(handler.args, handler.state, handler.control)
                         
                 for handler in self.handlers.values():
                     handler.control = handler.callback_handler.on_epoch_end(handler.args, handler.state, handler.control)
-                    handler._maybe_log_save_evaluate(handler.tr_loss, handler.grad_norm, handler.model, None, epoch, None)
+                    handler._maybe_log_save_evaluate(handler.tr_loss, handler.grad_norm, handler._model, None, epoch, None)
                         
-
+        # TODO: Finish this method
         
         metrics = {}
         self._memory_tracker.stop_and_update_metrics(metrics)
@@ -593,10 +603,14 @@ class MultiModelTrainer(Trainer):
 
         Subclass and override this method to implement custom training steps.
         '''
-        model = curr_handler.model
+        model = curr_handler._model
 
         model.train()
         inputs = curr_handler._prepare_inputs(inputs)
+
+        if is_sagemaker_mp_enabled():
+            loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
+            return loss_mb.reduce_mean().detach().to(self.args.device)
 
         with curr_handler.compute_loss_context_manager():
             loss = self.compute_loss(model, inputs)
@@ -604,6 +618,12 @@ class MultiModelTrainer(Trainer):
 
         if curr_handler.args.n_gpu > 1:
             loss = loss.mean()
+
+        if self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss)
 
         return loss.detach() / curr_handler.args.gradient_accumulation_steps
     

@@ -7,11 +7,14 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from transformers import DataCollator, EvalPrediction, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
-from transformers.utils.import_utils import is_peft_available
+from transformers.utils.import_utils import is_apex_available, is_peft_available, is_sagemaker_mp_enabled
 
 from cycleformers.cycles import CausalCycle, Seq2SeqCycle, CycleSequence
 from .multi_model_trainer import MultiModelTrainer
 from .training_args import TrainingArguments, ModelTrainingArguments
+
+if is_apex_available():
+    from apex import amp
 
 if is_peft_available():
     from peft import PeftModel
@@ -51,18 +54,6 @@ class CycleTrainer(MultiModelTrainer):
         if len(self.handlers) > 2:
             raise ValueError("CycleTrainer only supports two models")
         
-        for i, name in enumerate(self._model_names):
-            other_name = self._model_names[~i]
-
-            # Other model becomes generator and this current model is trained
-            self.handlers[name].cycle = self.init_cycle(
-                self.handlers[other_name].model,
-                self.handlers[other_name].tokenizer,
-                {},
-                self.handlers[name].model,
-                self.handlers[name].tokenizer,
-            )
-        
     # TODO: Add support for multi-adapter
     def init_cycle(self, gen_model, gen_tokenizer, gen_model_generation_config, train_model, train_tokenizer):
         gen_cycle = Seq2SeqCycle if gen_model.config.is_encoder_decoder else CausalCycle
@@ -90,16 +81,32 @@ class CycleTrainer(MultiModelTrainer):
         return cycle_stages
     
     def training_step(self, curr_handler, inputs, all_handlers):
-        model = curr_handler.model
+        curr_handler._model.train()
 
-        model.train()
         inputs = curr_handler._prepare_inputs(inputs)
+
+        if not getattr(curr_handler, 'cycle', False):
+            other_model = self._model_names[~self._model_names.index(curr_handler._name)]
+            curr_handler.cycle = self.init_cycle(
+                gen_model=all_handlers[other_model]._model,
+                gen_tokenizer=all_handlers[other_model].tokenizer,
+                gen_model_generation_config={},
+                train_model=curr_handler._model,
+                train_tokenizer=curr_handler.tokenizer,
+            )
+
+            print(curr_handler.cycle)
 
         with curr_handler.compute_loss_context_manager():
             loss = self.compute_loss(curr_handler.cycle, inputs)
-            loss.backward()
 
         if curr_handler.args.n_gpu > 1:
             loss = loss.mean()
+
+        if curr_handler.use_apex:
+            with amp.scale_loss(loss, curr_handler.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            curr_handler.accelerator.backward(loss)
 
         return loss.detach() / curr_handler.args.gradient_accumulation_steps
