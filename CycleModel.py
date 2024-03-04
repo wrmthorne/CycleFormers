@@ -122,8 +122,8 @@ class CycleModel(LightningModule):
         opt_a, opt_b = self.optimizers()
         sch_a, sch_b = self.lr_schedulers()
         
-        if batch['a']:
-            loss_a = self.cycle(batch['a'], self.model_b, self.model_a).loss
+        if batch[0]['a']:
+            loss_a = self.cycle(batch[0]['a'], self.model_b, self.model_a).loss
             self.manual_backward(loss_a)
 
             if batch_idx % self.hparams.gradient_accumulation_steps == 0:
@@ -134,8 +134,8 @@ class CycleModel(LightningModule):
                 self.log('train_loss_a', loss_a, on_step=True, logger=True, batch_size=self.hparams.train_batch_size)
                 self.log('opt_a_lr', opt_a.param_groups[0]['lr'], on_step=True, logger=True)
 
-        if batch['b']:
-            loss_b = self.cycle(batch['b'], self.model_a, self.model_b).loss
+        if batch[0]['b']:
+            loss_b = self.cycle(batch[0]['b'], self.model_a, self.model_b).loss
             self.manual_backward(loss_b)
 
             if batch_idx % self.hparams.gradient_accumulation_steps == 0:
@@ -147,18 +147,18 @@ class CycleModel(LightningModule):
                 self.log('opt_b_lr', opt_b.param_groups[0]['lr'], on_step=True, logger=True)
 
     def validation_step(self, batch, batch_idx):
-        if batch['a']:
+        if batch[0]['a']:
             loss_a = self.model_a(
-                input_ids=batch['a']['input_ids'],
-                attention_mask=batch['a']['attention_mask'],
-                labels=batch['a']['labels']
+                input_ids=batch[0]['a']['input_ids'],
+                attention_mask=batch[0]['a']['attention_mask'],
+                labels=batch[0]['a']['labels']
             ).loss
             self.log('val_loss_a', loss_a, on_epoch=True, logger=True, batch_size=self.hparams.eval_batch_size)
-        if batch['b']:
+        if batch[0]['b']:
             loss_b = self.model_b(
-                input_ids=batch['b']['input_ids'],
-                attention_mask=batch['b']['attention_mask'],
-                labels=batch['b']['labels']
+                input_ids=batch[0]['b']['input_ids'],
+                attention_mask=batch[0]['b']['attention_mask'],
+                labels=batch[0]['b']['labels']
             ).loss
             self.log('val_loss_b', loss_b, on_epoch=True, logger=True, batch_size=self.hparams.eval_batch_size)
 
