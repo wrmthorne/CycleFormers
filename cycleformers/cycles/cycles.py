@@ -1,6 +1,7 @@
 import torch
 from transformers import GenerationConfig
 
+
 class Cycle:
     @staticmethod
     def generate(batch):
@@ -44,20 +45,16 @@ class CausalCycle(Cycle):
         def causal_generate(**inputs):
             model.eval()
 
-            # Force left padding while generating
-            default_padding_side = tokenizer.padding_side
-            tokenizer.padding_side = 'left'
-
             inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
             with torch.no_grad():
+
                 output_ids = model.generate(
                     **inputs,
                     pad_token_id=tokenizer.pad_token_id,
                     generation_config=generation_config,
                 )
 
-            tokenizer.padding_side = default_padding_side
             response_ids = output_ids[:, inputs['input_ids'].shape[-1]:]
 
             print(tokenizer.batch_decode(response_ids, skip_special_tokens=True))
@@ -68,7 +65,7 @@ class CausalCycle(Cycle):
         return causal_generate
     
     @staticmethod
-    def format(model, tokenizer, data_collator):
+    def format(tokenizer, data_collator):
         def causal_format(**inputs):
             inputs = {k: v.cpu() for k, v in inputs.items()}
 
@@ -126,7 +123,7 @@ class Seq2SeqCycle(Cycle):
         return seq2seq_generate
     
     @staticmethod
-    def format(model, tokenizer, data_collator):
+    def format(tokenizer, data_collator):
         def seq2seq_format(**inputs):
             # Set attention mask if skipping re-encoding because of same tokeniser for both models
             if 'attention_mask' not in inputs:

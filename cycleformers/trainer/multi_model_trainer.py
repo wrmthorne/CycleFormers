@@ -2,9 +2,18 @@ import math
 import os
 import sys
 import time
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from datasets import Dataset
+import numpy as np
 from packaging import version
 import torch
 from torch.optim import Optimizer
@@ -14,7 +23,6 @@ from torch.utils.data import DataLoader
 from transformers import (
     DataCollator,
     DataCollatorWithPadding,
-    default_data_collator,
     EvalPrediction,
     PreTrainedTokenizerBase,
     PreTrainedModel,
@@ -22,6 +30,7 @@ from transformers import (
     TrainerCallback,
     TrainerControl,
     TrainerState,
+    default_data_collator,
 )
 from transformers.integrations import deepspeed_init
 from transformers.trainer_callback import (
@@ -29,10 +38,17 @@ from transformers.trainer_callback import (
     PrinterCallback,
     ProgressCallback,
 )
+from transformers.trainer_pt_utils import (
+    find_batch_size,
+    nested_concat,
+    nested_detach,
+    nested_numpify,
+)
 from transformers.trainer_utils import (
+    TrainerMemoryTracker,
     enable_full_determinism,
     set_seed,
-    TrainerMemoryTracker,
+    speed_metrics,
 )
 from transformers.utils import logging
 from transformers.utils.import_utils import (
@@ -592,12 +608,29 @@ class MultiModelTrainer(Trainer):
                 for handler in self.handlers.values():
                     handler.control = handler.callback_handler.on_epoch_end(handler.args, handler.state, handler.control)
                     handler._maybe_log_save_evaluate(handler.tr_loss, handler.grad_norm, handler._model, None, epoch, None)
-                        
-        # TODO: Finish this method
-        
-        metrics = {}
-        self._memory_tracker.stop_and_update_metrics(metrics)
+                    
+        logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
+        self.is_in_train = False
+        self._memory_tracker.stop()
 
+        for handler in self.handlers.values():
+            handler._total_loss_scalar += handler.tr_loss.item()
+            handler.train_loss = handler._total_loss_scalar / handler.state.global_step
+
+            handler.metrics = speed_metrics(
+                'train',
+                start_time,
+                num_samples=handler.num_train_samples,
+                num_steps=handler.state.max_steps,
+                num_tokens=handler.num_train_tokens,
+            )
+            handler.store_flos()
+            handler.metrics['total_flos'] = handler.state.total_flos
+            handler.metrics['train_loss'] = handler.train_loss
+
+            self._memory_tracker.update_metrics(handler.metrics)
+
+            handler.log(handler.metrics)
 
     def training_step(self, curr_handler, inputs, all_handlers):
         '''
@@ -638,4 +671,180 @@ class MultiModelTrainer(Trainer):
 
         output = {**logs, **{"step": self.global_state.global_step}}
 
+    def evaluate(
+        self,
+        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval"
+    ):
+        self._memory_tracker.start()
+
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
+
+        start_time = time.time()
+
+        output = self.evaluation_loop(
+            eval_dataloader,
+            description='Evaluation',
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix
+        )
+
+    def evaluation_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = 'eval'
+    ):
         
+        for handler in self.handlers.values():
+            handler._model = handler._wrap_model(handler.model, training=False, dataloader=dataloader)
+
+            if len(handler.accelerator._models) == 0 and handler._model is handler.model:
+                handler._model = (
+                    handler.accelerator.prepare(handler._model)
+                    if handler.is_deepseed_enabled
+                    else handler.accelerator.prepare_model(handler._model, evaluation_mode=True)
+                )
+
+                if handler.is_fsdp_enabled:
+                    handler.model = handler._model
+
+                if handler._model is not handler.model:
+                    handler.model_wrapped = handler._model
+
+                if handler.is_deepspeed_enabled:
+                    handler.deepspeed = handler.model_wrapped
+        
+            if not self.is_in_train:
+                if handler.fp16_full_eval:
+                    handler._model = handler._model.to(dtype=torch.float16, device=handler.args.device)
+                elif handler.bf16_full_eval:
+                    handler._model = handler._model.to(dtype=torch.bfloat16, device=handler.args.device)
+
+            handler._model.eval()
+
+            handler.callback_handler.eval_dataloader = dataloader
+
+        logger.info(f'***** Running {description} *****')
+        if has_length(dataloader):
+            logger.info(f'  Num examples = {self.num_examples(dataloader)}')
+        else:
+            logger.info('  Num examples: Unknown')
+
+        for step, inputs in enumerate(dataloader):
+            for name, handler in self.handlers.items():
+                if name not in inputs:
+                    continue
+
+                handler.observed_batch_size = find_batch_size(inputs[name])
+                if handler.observed_batch_size is not None:
+                    handler.observed_num_examples += handler.observed_batch_size
+                    # For batch samplers, batch_size is not known by the dataloader in advance.
+                    if handler.batch_size is None:
+                        handler.batch_size = handler.observed_batch_size
+                else:
+                    handler.batch_size = handler.args.per_device_eval_batch_size
+
+                loss, logits, labels = self.prediction_step(handler, inputs[name], prediction_loss_only, ignore_keys=ignore_keys)
+                main_input_name = getattr(handler.model, "main_input_name", "input_ids")
+                inputs_decode = handler._prepare_input(inputs[name][main_input_name]) if handler.args.include_inputs_for_metrics else None
+
+                if loss is not None:
+                    losses = handler.gather_function(loss.repeat(handler.batch_size))
+                    handler.losses_host = losses if handler.losses_host is None else nested_concat(handler.losses_host, losses, padding_index=-100)
+                if labels is not None:
+                    labels = handler.accelerator.pad_across_processes(labels, dim=1, pad_index=-100)
+                if inputs_decode is not None:
+                    inputs_decode = handler.accelerator.pad_across_processes(inputs_decode, dim=1, pad_index=-100)
+                    inputs_decode = handler.gather_function((inputs_decode))
+                    handler.inputs_host = (
+                        inputs_decode
+                        if handler.inputs_host is None
+                        else nested_concat(handler.inputs_host, inputs_decode, padding_index=-100)
+                    )
+                if logits is not None:
+                    logits = handler.accelerator.pad_across_processes(logits, dim=1, pad_index=-100)
+                    if handler.preprocess_logits_for_metrics is not None:
+                        logits = handler.preprocess_logits_for_metrics(logits, labels)
+                    logits = handler.gather_function((logits))
+                    handler.preds_host = logits if handler.preds_host is None else nested_concat(handler.preds_host, logits, padding_index=-100)
+
+                if labels is not None:
+                    labels = handler.gather_function((labels))
+                    handler.labels_host = labels if handler.labels_host is None else nested_concat(handler.labels_host, labels, padding_index=-100)
+
+                handler.control = handler.callback_handler.on_prediction_step_end(handler.args, handler.state, handler.control)
+
+                if handler.args.eval_accumulation_steps is not None and (step + 1) % handler.args.eval_accumulation_steps == 0:
+                    if handler.losses_host is not None:
+                        losses = nested_numpify(handler.losses_host)
+                        all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
+                    if handler.preds_host is not None:
+                        logits = nested_numpify(handler.preds_host)
+                        all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
+                    if handler.inputs_host is not None:
+                        inputs_decode = nested_numpify(handler.inputs_host)
+                        all_inputs = (
+                            inputs_decode
+                            if all_inputs is None
+                            else nested_concat(all_inputs, inputs_decode, padding_index=-100)
+                        )
+                    if handler.labels_host is not None:
+                        labels = nested_numpify(handler.labels_host)
+                        all_labels = (
+                            labels if all_labels is None else nested_concat(all_labels, labels, padding_index=-100)
+                        )
+
+                    # Set back to None to begin a new accumulation
+                    handler.losses_host, handler.preds_host, handler.inputs_host, handler.labels_host = None, None, None, None
+
+    def prediction_step(
+        self,
+        curr_handler: _ModelHandler,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ):
+        # TODO: Update to be the same as the original trainer later
+        has_labels = 'labels' in inputs
+        inputs = curr_handler._prepare_inputs(inputs)
+
+        if has_labels:
+            labels = nested_detach(tuple(inputs.get('labels')))
+            if len(labels) == 1:
+                labels = labels[0]
+        else:
+            labels = None
+
+        with torch.no_grad():
+            if has_labels:
+                with curr_handler.compute_loss_context_manager():
+                    loss, outputs = self.compute_loss(curr_handler._model, inputs, return_outputs=True)
+                loss = loss.mean().detach()
+
+                if isinstance(outputs, dict):
+                    logits = tuple(v for k, v in outputs.items() if k not in ignore_keys + ['loss'])
+                else:
+                    logits = outputs[1:]
+
+            else:
+                loss = None
+                with curr_handler.compute_loss_context_manager():
+                    outputs = curr_handler._model(**inputs)
+                
+                if isinstance(outputs, dict):
+                    logits = tuple(v for k, v in outputs.items() if k not in ignore_keys)
+                else:
+                    logits = outputs
+
+        if prediction_loss_only:
+            return (loss, None, None)
+        
+        logits = nested_detach(logits)
+        if len(logits) == 1:
+            logits = logits[0]
+
+        return (loss, logits, labels)

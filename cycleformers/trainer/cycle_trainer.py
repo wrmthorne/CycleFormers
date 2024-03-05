@@ -72,7 +72,7 @@ class CycleTrainer(MultiModelTrainer):
             }))
 
         cycle_stages.extend(OrderedDict({
-            'Format Synthetic Train IDs': train_cycle.format(train_model, train_tokenizer, train_collator),
+            'Format Synthetic Train IDs': train_cycle.format(train_tokenizer, train_collator),
             'Calculate Train Model Reconstruction Loss': train_cycle.train(train_model)
         }))
 
